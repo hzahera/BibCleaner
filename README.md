@@ -1,40 +1,119 @@
 # BibCleaner
 
-BibCleaner is a lightweight Python toolkit for cleaning and enriching BibTeX files.
+**A Python toolkit for automated BibTeX metadata enrichment and validation**
 
-## Features
+[![Python 3.8+](https://img.shields.io/badge/Python-3.8+-blue.svg)](https://www.python.org/downloads/)
+[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
+[![Code style: black](https://img.shields.io/badge/code%20style-black-000000.svg)](https://github.com/psf/black)
 
-- Replace arXiv entries with published venue metadata when available
-- Expand author lists using Semantic Scholar author metadata
-- Read and write ".bib" files using `bibtexparser`
-- Gracefully skip entries when metadata is unavailable
-- Command-line interface for batch BibTeX cleaning
+#research #bibtex #bibliography #metadata #academic #citation #python-tool
 
-## Install
+## Overview
+
+BibCleaner is a lightweight, production-ready Python toolkit designed for researchers and academics to automatically clean, validate, and enrich BibTeX bibliographies. It leverages the Semantic Scholar API to replace incomplete arXiv references with published venue metadata and expand author attribution information.
+
+## Key Features
+
+✨ **Automated Metadata Enrichment**
+- Intelligently replace arXiv preprint entries with their published venue information
+- Expand truncated author lists using Semantic Scholar author metadata
+- Validate and standardize citation formatting
+
+🔄 **Seamless Integration**
+- Read and write `.bib` files using industry-standard `bibtexparser`
+- Graceful error handling—skips unavailable metadata without disrupting workflow
+- CLI and programmatic Python API support
+
+⚙️ **Research-Ready**
+- Batch processing for large bibliography collections
+- Built-in progress tracking with `tqdm`
+- HTTP request handling with automatic retry logic
+
+## Installation
+
+### Via pip (Recommended)
+
+```bash
+pip install -e .
+```
+
+### Manual Installation
 
 ```bash
 pip install -r requirements.txt
 pip install -e .
 ```
 
+### Requirements
+
+- `bibtexparser` — BibTeX file parsing
+- `requests` — HTTP client for API calls
+- `tqdm` — Progress bar utilities
+
 ## Usage
+
+### Command-Line Interface
 
 ```bash
 bibcleaner input.bib output.bib
 ```
 
-Or run directly with Python:
+### Python API
 
 ```bash
 python -m bibcleaner.cli input.bib output.bib
 ```
 
-## Requirements
+### Example Programmatic Usage
 
-- `bibtexparser`
-- `requests`
-- `tqdm`
+```python
+from bibcleaner import BibCleaner
 
-## Notes
+cleaner = BibCleaner()
+cleaned_entries = cleaner.clean_bibliography('references.bib')
+cleaner.write_bib(cleaned_entries, 'references_cleaned.bib')
+```
 
-BibCleaner is intended for BibTeX collections with arXiv entries and can improve citation metadata by leveraging Semantic Scholar lookup results.
+## How It Works
+
+1. **Parse** — Loads BibTeX entries using bibtexparser
+2. **Identify** — Detects arXiv preprints and incomplete author lists
+3. **Enrich** — Queries Semantic Scholar for published metadata
+4. **Validate** — Cross-references and standardizes entries
+5. **Export** — Writes cleaned bibliography to output file
+
+## Use Cases
+
+- 📚 Preparing bibliographies for academic publications
+- 🔍 Standardizing citation formats across large research projects
+- 📊 Maintaining up-to-date reference collections
+- 🏢 Batch processing institutional bibliography databases
+
+## Citation
+
+If you use BibCleaner in your research, please cite it:
+
+```bibtex
+@software{bibcleaner2026,
+  author = {Zahera, Hassan},
+  title = {BibCleaner: Automated BibTeX Enrichment Toolkit},
+  year = {2026},
+  url = {https://github.com/hzahera/bib-cleaner}
+}
+```
+
+## Contributing
+
+Contributions are welcome! Please feel free to submit issues or pull requests.
+
+## License
+
+This project is licensed under the MIT License — see the [LICENSE](LICENSE) file for details.
+
+## Support
+
+For issues, feature requests, or questions, please [open an issue](https://github.com/hzahera/bib-cleaner/issues) on GitHub.
+
+---
+
+**Developed for researchers, by researchers.**
