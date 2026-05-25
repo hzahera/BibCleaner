@@ -1,5 +1,7 @@
 # BibCleaner
 
+**Developed for researchers, by researchers.**
+
 **A Python toolkit for automated BibTeX metadata enrichment and validation**
 
 [![Python 3.8+](https://img.shields.io/badge/Python-3.8+-blue.svg)](https://www.python.org/downloads/)
@@ -100,7 +102,3 @@ This project is licensed under the MIT License — see the [LICENSE](LICENSE) fi
 ## Support
 
 For issues, feature requests, or questions, please [open an issue](https://github.com/hzahera/bib-cleaner/issues) on GitHub.
-
----
-
-**Developed for researchers, by Hamada Zahera.**
