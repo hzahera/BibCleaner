@@ -2,34 +2,59 @@
 
 **Developed for researchers, by researchers.**
 
-**A Python toolkit for automated BibTeX metadata enrichment and validation**
+**A Python toolkit for automated BibTeX metadata enrichment and venue normalization**
 
-[![Python 3.8+](https://img.shields.io/badge/Python-3.8+-blue.svg)](https://www.python.org/downloads/)
+[![Python 3.10+](https://img.shields.io/badge/Python-3.10+-blue.svg)](https://www.python.org/downloads/)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
 [![Code style: black](https://img.shields.io/badge/code%20style-black-000000.svg)](https://github.com/psf/black)
 
-#research #bibtex #bibliography #metadata #academic #citation #python-tool
+---
 
 ## Overview
 
-BibCleaner is a lightweight Python toolkit designed for researchers and academics to automatically clean, validate, and enrich BibTeX bibliographies. It leverages the Semantic Scholar API to replace incomplete arXiv references with published venue metadata and expand author attribution information.
+BibCleaner automatically cleans and enriches BibTeX bibliographies. It detects arXiv preprint entries and replaces them with their published conference or journal metadata, expands incomplete author lists, and normalizes all venue names to a consistent full-name format — across the entire `.bib` file, not just the entries it enriched.
 
-## Key Features
+---
 
-✨ **Automated Metadata Enrichment**
-- Intelligently replace arXiv preprint entries with their published venue information
-- Expand truncated author lists using Semantic Scholar author metadata
-- Validate and standardize citation formatting
+## Features
 
-🔄 **Seamless Integration**
-- Read and write `.bib` files using industry-standard `bibtexparser`
-- Graceful error handling—skips unavailable metadata without disrupting workflow
-- CLI and programmatic Python API support
+**Preprint → Published venue replacement**
+- Detects arXiv entries from `eprint`, `archiveprefix`, or a `journal = {arXiv preprint arXiv:XXXX}` field
+- Replaces them with the correct `@inproceedings` or `@article` entry including `booktitle`/`journal`, `year`, `pages`, `volume`, and `doi`
+- Entries confirmed as still-unpublished are converted to clean `@misc` preprints with `eprint`, `archiveprefix`, `primaryclass`, and `url` fields
 
-⚙️ **Research-Ready**
-- Batch processing for large bibliography collections
-- Built-in progress tracking with `tqdm`
-- HTTP request handling with automatic retry logic
+**Full author list expansion**
+- Expands truncated lists (`et al.`, `others`) and silently incomplete lists using canonical author data
+- arXiv API is used as the primary source for author names (exact as submitted by the authors)
+
+**Venue name normalization**
+- Runs on every entry in the file, including ones that were never arXiv preprints
+- Maps all known abbreviations and source-specific variants to a single canonical full name
+
+| Input (any format) | Canonical output |
+|---|---|
+| `NeurIPS` / `NIPS` / `neural inf process syst` | `Advances in Neural Information Processing Systems` |
+| `ICLR` | `International Conference on Learning Representations` |
+| `ICML` | `International Conference on Machine Learning` |
+| `ACL` | `Annual Meeting of the Association for Computational Linguistics` |
+| `TACL` | `Transactions of the Association for Computational Linguistics` |
+| `CVPR` | `IEEE/CVF Conference on Computer Vision and Pattern Recognition` |
+
+---
+
+## Data Sources
+
+BibCleaner queries four sources in order, stopping as soon as a published venue is found:
+
+| Priority | Source | Used for |
+|---|---|---|
+| 1 | **arXiv API** | Canonical author names and `primaryclass` for every arXiv entry |
+| 2 | **DBLP** | Published venue lookup — fast, no rate limits, authoritative for CS |
+| 3 | **CrossRef** | Journal and proceedings metadata; covers ACM, IEEE, Springer |
+| 4 | **Semantic Scholar** | Fallback arXiv ID lookup when DBLP and CrossRef find nothing |
+| 5 | **OpenAlex** | Last-resort title search |
+
+---
 
 ## Installation
 
@@ -69,44 +94,31 @@ Your prompt should now be prefixed with `(venv)`.
 pip install -r requirements.txt
 ```
 
-This installs:
-
 | Package | Purpose |
 |---|---|
 | `bibtexparser>=2.0.0` | Parse and write `.bib` files |
-| `requests>=2.25.0` | HTTP client for API calls |
-| `tqdm>=4.65.0` | Progress bar during enrichment |
+| `requests>=2.25.0` | HTTP client for all API calls |
+| `tqdm>=4.65.0` | Progress bar during processing |
 
-### 4. Install the package (editable mode)
+### 4. Install the package
 
 ```bash
 pip install -e .
 ```
 
-Editable mode means any changes you make to the source files take effect immediately — no reinstall needed.
-
-### Optional: Semantic Scholar API key
-
-By default, BibCleaner uses the public Semantic Scholar API (rate-limited to ~1 request/3 seconds). For larger bibliographies you can apply for a free API key and set it as an environment variable:
-
-```bash
-export S2_API_KEY=your_key_here   # macOS / Linux
-set S2_API_KEY=your_key_here      # Windows Command Prompt
-```
-
-Apply for a key at <https://www.semanticscholar.org/product/api#api-key-form>.
+Editable mode — changes to source files take effect immediately, no reinstall needed.
 
 ---
 
 ## Usage
 
-### Command-Line Interface
+### Command line
 
 ```bash
 bibcleaner input.bib -o output.bib
 ```
 
-If `-o` is omitted, the enriched file is saved as `enriched_<input>.bib` in the same directory.
+If `-o` is omitted the enriched file is saved as `enriched_<input>.bib` in the same directory.
 
 ### Python module
 
@@ -122,29 +134,129 @@ from bibcleaner import process_bibliography
 process_bibliography("references.bib", "references_enriched.bib")
 ```
 
-## How It Works
+---
 
-1. **Parse** — Loads BibTeX entries using bibtexparser
-2. **Identify** — Detects arXiv preprints and incomplete author lists
-3. **Enrich** — Queries Semantic Scholar for published metadata
-4. **Validate** — Cross-references and standardizes entries
-5. **Export** — Writes cleaned bibliography to output file
+## Example
 
-## Use Cases
+**Input**
 
-- 📚 Preparing bibliographies for academic publications
-- 🔍 Standardizing citation formats across large research projects
-- 📊 Maintaining up-to-date reference collections
-- 🏢 Batch processing institutional bibliography databases
+```bibtex
+@article{madaan2023selfrefine,
+  title   = {Self-Refine: Iterative Refinement with Self-Feedback},
+  author  = {Madaan, Aman and Tandon, Niket and others},
+  journal = {arXiv preprint arXiv:2303.17651},
+  year    = {2023}
+}
+
+@article{llmbar2024,
+  title   = {RouterBench: A Benchmark for Multi-LLM Routing Systems},
+  author  = {Hu, Qitian Jason and Bieker, Jacob and Li, Xiuyu},
+  journal = {arXiv preprint arXiv:2403.12031},
+  year    = {2024}
+}
+
+@inproceedings{existing,
+  title     = {Attention Is All You Need},
+  author    = {Vaswani, Ashish and others},
+  booktitle = {NeurIPS},
+  year      = {2017}
+}
+```
+
+**Output**
+
+```bibtex
+@inproceedings{madaan2023selfrefine,
+  title     = {Self-Refine: Iterative Refinement with Self-Feedback},
+  author    = {Aman Madaan and Niket Tandon and Prakhar Gupta and ...},
+  booktitle = {Advances in Neural Information Processing Systems},
+  year      = {2023}
+}
+
+@misc{llmbar2024,
+  title         = {RouterBench: A Benchmark for Multi-LLM Routing Systems},
+  author        = {Qitian Jason Hu and Jacob Bieker and Xiuyu Li and Nan Jiang and ...},
+  year          = {2024},
+  eprint        = {2403.12031},
+  archiveprefix = {arXiv},
+  primaryclass  = {cs.LG},
+  url           = {https://arxiv.org/abs/2403.12031}
+}
+
+@inproceedings{existing,
+  title     = {Attention Is All You Need},
+  author    = {Vaswani, Ashish and others},
+  booktitle = {Advances in Neural Information Processing Systems},
+  year      = {2017}
+}
+```
+
+The third entry was never an arXiv preprint — BibCleaner normalized its `booktitle` from `NeurIPS` to the canonical full name automatically.
+
+---
+
+## Optional API keys
+
+All data sources work without a key. Keys unlock higher rate limits for large bibliographies.
+
+| Variable | Service | Where to apply |
+|---|---|---|
+| `S2_API_KEY` | Semantic Scholar | <https://www.semanticscholar.org/product/api#api-key-form> |
+| `CROSSREF_MAILTO` | CrossRef polite pool | Any valid email address |
+
+```bash
+# macOS / Linux
+export S2_API_KEY=your_key_here
+export CROSSREF_MAILTO=you@example.com
+
+# Windows Command Prompt
+set S2_API_KEY=your_key_here
+set CROSSREF_MAILTO=you@example.com
+```
+
+---
+
+## How it works
+
+```
+For every entry in the .bib file
+│
+├─ Does it contain an arXiv ID?
+│   ├─ Yes →  Step 1: arXiv API  (fetch canonical authors + primaryclass)
+│   │         Step 2: DBLP       (find published venue — one request)
+│   │         Step 3: CrossRef   (title search fallback)
+│   │         Step 4: Semantic Scholar (arXiv ID lookup)
+│   │         Step 5: OpenAlex   (last-resort title search)
+│   │         Step 6: If no venue found — normalize as clean @misc preprint
+│   │
+│   └─ No  →  Normalize booktitle / journal to canonical full name
+│
+└─ Write enriched .bib file
+```
+
+---
+
+## Project structure
+
+```
+bibcleaner/
+├── api.py          Semantic Scholar arXiv ID client
+├── arxiv_api.py    arXiv Atom API client (canonical authors)
+├── bibcleaner.py   Main orchestration
+├── cli.py          Command-line interface
+├── crossref.py     CrossRef title search client
+├── dblp.py         DBLP title search client
+├── enricher.py     Enrichment pipeline logic
+├── openalex.py     OpenAlex title search client
+└── venues.py       Venue name normalization table (~35 venues)
+```
+
+---
 
 ## Contributing
 
-Contributions and feedback are welcome! Please feel free to submit issues or pull requests.
+Contributions and feedback are welcome. Please open an issue or pull request on GitHub.
 
 ## License
 
-This project is licensed under the MIT License — see the [LICENSE](LICENSE) file for details.
-
-## Support
-
-For issues, feature requests, or questions, please [open an issue](https://github.com/hzahera/bib-cleaner/issues) on GitHub.
+MIT — see [LICENSE](LICENSE).
