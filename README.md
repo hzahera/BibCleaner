@@ -33,47 +33,93 @@ BibCleaner is a lightweight Python toolkit designed for researchers and academic
 
 ## Installation
 
-### Via pip (Recommended)
+### 1. Clone the repository
 
 ```bash
-pip install -e .
+git clone https://github.com/hzahera/bib-cleaner.git
+cd bib-cleaner
 ```
 
-### Manual Installation
+### 2. Create and activate a virtual environment
+
+```bash
+python3 -m venv venv
+```
+
+Activate it:
+
+- **macOS / Linux**
+  ```bash
+  source venv/bin/activate
+  ```
+- **Windows (Command Prompt)**
+  ```bat
+  venv\Scripts\activate.bat
+  ```
+- **Windows (PowerShell)**
+  ```powershell
+  venv\Scripts\Activate.ps1
+  ```
+
+Your prompt should now be prefixed with `(venv)`.
+
+### 3. Install dependencies
 
 ```bash
 pip install -r requirements.txt
+```
+
+This installs:
+
+| Package | Purpose |
+|---|---|
+| `bibtexparser>=2.0.0` | Parse and write `.bib` files |
+| `requests>=2.25.0` | HTTP client for API calls |
+| `tqdm>=4.65.0` | Progress bar during enrichment |
+
+### 4. Install the package (editable mode)
+
+```bash
 pip install -e .
 ```
 
-### Requirements
+Editable mode means any changes you make to the source files take effect immediately — no reinstall needed.
 
-- `bibtexparser` — BibTeX file parsing
-- `requests` — HTTP client for API calls
-- `tqdm` — Progress bar utilities
+### Optional: Semantic Scholar API key
+
+By default, BibCleaner uses the public Semantic Scholar API (rate-limited to ~1 request/3 seconds). For larger bibliographies you can apply for a free API key and set it as an environment variable:
+
+```bash
+export S2_API_KEY=your_key_here   # macOS / Linux
+set S2_API_KEY=your_key_here      # Windows Command Prompt
+```
+
+Apply for a key at <https://www.semanticscholar.org/product/api#api-key-form>.
+
+---
 
 ## Usage
 
 ### Command-Line Interface
 
 ```bash
-bibcleaner input.bib output.bib
+bibcleaner input.bib -o output.bib
 ```
 
-### Python API
+If `-o` is omitted, the enriched file is saved as `enriched_<input>.bib` in the same directory.
+
+### Python module
 
 ```bash
-python -m bibcleaner.cli input.bib output.bib
+python -m bibcleaner.cli input.bib -o output.bib
 ```
 
-### Example Programmatic Usage
+### Programmatic API
 
 ```python
-from bibcleaner import BibCleaner
+from bibcleaner import process_bibliography
 
-cleaner = BibCleaner()
-cleaned_entries = cleaner.clean_bibliography('references.bib')
-cleaner.write_bib(cleaned_entries, 'references_cleaned.bib')
+process_bibliography("references.bib", "references_enriched.bib")
 ```
 
 ## How It Works
