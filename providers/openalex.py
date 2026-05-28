@@ -9,6 +9,8 @@ from typing import Dict, List, Optional
 
 import requests
 
+from .provider import Provider, ProviderQuery, ProviderResult
+
 logger = logging.getLogger(__name__)
 
 OPENALEX_WORKS = "https://api.openalex.org/works"
@@ -40,7 +42,9 @@ def _surname_set(authors: List[str]) -> set:
     return out
 
 
-class OpenAlexClient:
+class OpenAlexClient(Provider):
+    name = "openalex"
+
     def __init__(
         self,
         rate_limit_delay: float = 0.2,
@@ -235,3 +239,18 @@ class OpenAlexClient:
                 out["journal"] = source_name
 
         return out
+
+    def lookup(self, query: ProviderQuery) -> ProviderResult:
+        work = self.best_match(query.title, query.authors, query.year)
+        if not work:
+            return ProviderResult()
+
+        normalized = self.normalize_work(work)
+        if not normalized:
+            return ProviderResult()
+
+        venue = (normalized.get("journal") or normalized.get("booktitle") or "").lower()
+        if "arxiv" in venue:
+            return ProviderResult()
+
+        return ProviderResult(published_data=normalized)

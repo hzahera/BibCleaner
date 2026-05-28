@@ -17,18 +17,26 @@ from typing import Optional
 
 from bibtexparser.model import Entry, Field
 
-from . import dblp, crossref
-from .api import fetch_by_arxiv_id
-from .arxiv_api import fetch as fetch_arxiv
-from .openalex import OpenAlexClient
+from providers import (
+    ArxivProvider,
+    CrossrefProvider,
+    DblpProvider,
+    OpenAlexClient,
+    ProviderQuery,
+    SemanticScholarProvider,
+)
+
 from .venues import normalize_or_keep
 
 logger = logging.getLogger(__name__)
 
-_ARXIV_VENUES = frozenset({"arxiv", "arxiv.org", "corr", "arxiv e-prints", ""})
 _ARXIV_FIELDS = {"eprint", "archiveprefix", "primaryclass"}
 
-_oa_client = OpenAlexClient()
+_arxiv_provider = ArxivProvider()
+_dblp_provider = DblpProvider()
+_crossref_provider = CrossrefProvider()
+_ss_provider = SemanticScholarProvider()
+_oa_provider = OpenAlexClient()
 
 
 # ---------------------------------------------------------------------------
@@ -152,60 +160,6 @@ def _normalize_preprint(entry: Entry, fields: dict, authors: list, primaryclass:
 
 
 # ---------------------------------------------------------------------------
-# Per-source helpers
-# ---------------------------------------------------------------------------
-
-def _is_published_ss(paper: dict) -> bool:
-    pub_types = [t.lower() for t in (paper.get("publicationTypes") or [])]
-    if pub_types == ["preprint"]:
-        return False
-    venue = (
-        (paper.get("publicationVenue") or {}).get("name")
-        or paper.get("venue")
-        or ""
-    ).lower().strip()
-    return venue not in _ARXIV_VENUES and "arxiv" not in venue
-
-
-def _ss_to_data(paper: dict) -> Optional[dict]:
-    pub_venue = paper.get("publicationVenue") or {}
-    venue_type = (pub_venue.get("type") or "").lower()
-    venue_name = pub_venue.get("name") or paper.get("venue") or ""
-    journal_obj = paper.get("journal") or {}
-    journal_is_arxiv = "arxiv" in (journal_obj.get("name") or "").lower()
-
-    _CONF = {"proceedings", "conference", "symposium", "workshop", "meeting"}
-    is_conf = "conference" in venue_type or any(h in venue_name.lower() for h in _CONF)
-
-    doi = (paper.get("externalIds") or {}).get("DOI") or ""
-    if "arxiv" in doi.lower():
-        doi = None
-
-    data: dict = {
-        "year": paper.get("year"),
-        "doi": doi or None,
-        "authors": [a["name"] for a in (paper.get("authors") or []) if a.get("name")],
-        "pages": journal_obj.get("pages") if not journal_is_arxiv else None,
-        "volume": str(journal_obj["volume"]) if journal_obj.get("volume") and not journal_is_arxiv else None,
-    }
-    if is_conf:
-        data["entry_type"] = "inproceedings"
-        data["booktitle"] = venue_name
-    else:
-        data["entry_type"] = "article"
-        data["journal"] = journal_obj.get("name") or venue_name
-
-    return data
-
-
-def _oa_to_data(normalized: dict) -> Optional[dict]:
-    venue = normalized.get("journal") or normalized.get("booktitle") or ""
-    if "arxiv" in venue.lower():
-        return None
-    return normalized
-
-
-# ---------------------------------------------------------------------------
 # Public entry point
 # ---------------------------------------------------------------------------
 
@@ -235,72 +189,73 @@ def enrich_entry(entry: Entry) -> bool:
     raw_author = fields.get("author", "")
     authors = [a.strip() for a in re.split(r"\band\b", raw_author, flags=re.IGNORECASE) if a.strip()]
     year = fields.get("year")
+    query = ProviderQuery(title=title, authors=authors, year=year, arxiv_id=arxiv_id)
 
     logger.debug(f"Processing {entry.key} (arXiv:{arxiv_id})")
 
     # ---- Step 1: arXiv API — canonical authors and category ----
-    arxiv_meta = fetch_arxiv(arxiv_id)
-    canonical_authors: list = (arxiv_meta or {}).get("authors", [])
-    primaryclass: Optional[str] = (arxiv_meta or {}).get("primaryclass")
+    arxiv_result = _arxiv_provider.lookup(query)
+    canonical_authors: list = arxiv_result.canonical_authors
+    primaryclass: Optional[str] = arxiv_result.primaryclass
 
     # ---- Step 2: DBLP — one request, published + preprint split ----
-    dblp_result = dblp.lookup(title, authors, year)
-    dblp_pub = dblp_result["published"]
-    dblp_pre = dblp_result["preprint"]
+    dblp_result = _dblp_provider.lookup(query)
+    dblp_pub = dblp_result.published_data
+    dblp_pre_authors = dblp_result.preprint_authors
 
     if dblp_pub:
-        data = dblp.normalize(dblp_pub)
+        data = dict(dblp_pub)
         # Prefer canonical arXiv authors over DBLP if DBLP has fewer
         if _better_authors(canonical_authors, _format_authors(data.get("authors", []))):
             data["authors"] = canonical_authors
         _apply(entry, data, fields)
-        logger.info(f"[DBLP] {entry.key} → {dblp_pub.get('venue')}")
+        logger.info(f"[DBLP] {entry.key}")
         return True
 
     # ---- Step 3: CrossRef — title search ----
-    cr_item = crossref.best_match(title, authors, year)
-    if cr_item:
-        data = crossref.normalize(cr_item)
-        if data:
+    crossref_result = _crossref_provider.lookup(query)
+    if crossref_result.published_data:
+        data = dict(crossref_result.published_data)
+        if _better_authors(canonical_authors, _format_authors(data.get("authors", []))):
+            data["authors"] = canonical_authors
+        _apply(entry, data, fields)
+        logger.info(f"[CrossRef] {entry.key}")
+        return True
+
+    # ---- Step 4: Semantic Scholar — arXiv ID (skip when DBLP/CrossRef found no venue) ----
+    dblp_or_cr_knows = bool(
+        dblp_result.published_data
+        or dblp_pre_authors
+        or crossref_result.published_data
+    )
+    ss_result = None
+    if not dblp_or_cr_knows:
+        ss_result = _ss_provider.lookup(query)
+        if ss_result.published_data:
+            data = dict(ss_result.published_data)
             if _better_authors(canonical_authors, _format_authors(data.get("authors", []))):
                 data["authors"] = canonical_authors
             _apply(entry, data, fields)
-            logger.info(f"[CrossRef] {entry.key} → {cr_item.get('container-title', ['?'])[0]}")
+            logger.info(f"[SS] {entry.key}")
             return True
 
-    # ---- Step 4: Semantic Scholar — arXiv ID (skip when DBLP/CrossRef found no venue) ----
-    dblp_or_cr_knows = dblp_pub is not None or dblp_pre is not None or cr_item is not None
-    paper = None
-    if not dblp_or_cr_knows:
-        paper = fetch_by_arxiv_id(arxiv_id)
-        if paper and _is_published_ss(paper):
-            data = _ss_to_data(paper)
-            if data:
-                if _better_authors(canonical_authors, _format_authors(data.get("authors", []))):
-                    data["authors"] = canonical_authors
-                _apply(entry, data, fields)
-                logger.info(f"[SS] {entry.key}")
-                return True
-
         # ---- Step 5: OpenAlex — title search ----
-        oa_work = _oa_client.best_match(title, authors, year)
-        if oa_work:
-            normalized = _oa_client.normalize_work(oa_work)
-            data = _oa_to_data(normalized) if normalized else None
-            if data:
-                if _better_authors(canonical_authors, _format_authors(data.get("authors", []))):
-                    data["authors"] = canonical_authors
-                _apply(entry, data, fields)
-                logger.info(f"[OA] {entry.key}")
-                return True
+        oa_result = _oa_provider.lookup(query)
+        if oa_result.published_data:
+            data = dict(oa_result.published_data)
+            if _better_authors(canonical_authors, _format_authors(data.get("authors", []))):
+                data["authors"] = canonical_authors
+            _apply(entry, data, fields)
+            logger.info(f"[OA] {entry.key}")
+            return True
 
     # ---- Step 6: Normalize preprint — best available author data ----
     # Priority: arXiv API > DBLP preprint > SS
     best_authors = canonical_authors
-    if not best_authors and dblp_pre:
-        best_authors = dblp.normalize(dblp_pre).get("authors", [])
-    if not best_authors and paper:
-        best_authors = [a["name"] for a in (paper.get("authors") or []) if a.get("name")]
+    if not best_authors and dblp_pre_authors:
+        best_authors = dblp_pre_authors
+    if not best_authors and ss_result and ss_result.preprint_authors:
+        best_authors = ss_result.preprint_authors
 
     _normalize_preprint(entry, fields, best_authors, primaryclass)
     changed = bool(best_authors) or "eprint" not in fields
