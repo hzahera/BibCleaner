@@ -56,7 +56,7 @@ BibCleaner queries four sources in order, stopping as soon as a published venue 
 
 ---
 
-## Installation
+## Installation (uv)
 
 ### 1. Clone the repository
 
@@ -65,48 +65,30 @@ git clone https://github.com/hzahera/bib-cleaner.git
 cd bib-cleaner
 ```
 
-### 2. Create and activate a virtual environment
+### 2. Install dependencies and create environment
+
+```bash
+uv sync
+```
+
+### 3. Run commands with uv
+
+```bash
+uv run bibcleaner input.bib -o output.bib
+uv run uvicorn bibcleaner.web_api:app --reload
+uv run pytest
+```
+
+### Optional: pip workflow
+
+If you prefer pip/venv, the existing workflow still works:
 
 ```bash
 python3 -m venv venv
-```
-
-Activate it:
-
-- **macOS / Linux**
-  ```bash
-  source venv/bin/activate
-  ```
-- **Windows (Command Prompt)**
-  ```bat
-  venv\Scripts\activate.bat
-  ```
-- **Windows (PowerShell)**
-  ```powershell
-  venv\Scripts\Activate.ps1
-  ```
-
-Your prompt should now be prefixed with `(venv)`.
-
-### 3. Install dependencies
-
-```bash
+source venv/bin/activate
 pip install -r requirements.txt
-```
-
-| Package | Purpose |
-|---|---|
-| `bibtexparser>=2.0.0` | Parse and write `.bib` files |
-| `requests>=2.25.0` | HTTP client for all API calls |
-| `tqdm>=4.65.0` | Progress bar during processing |
-
-### 4. Install the package
-
-```bash
 pip install -e .
 ```
-
-Editable mode — changes to source files take effect immediately, no reinstall needed.
 
 ---
 
@@ -115,7 +97,7 @@ Editable mode — changes to source files take effect immediately, no reinstall 
 ### Command line
 
 ```bash
-bibcleaner input.bib -o output.bib
+uv run bibcleaner input.bib -o output.bib
 ```
 
 If `-o` is omitted the enriched file is saved as `enriched_<input>.bib` in the same directory.
@@ -123,16 +105,43 @@ If `-o` is omitted the enriched file is saved as `enriched_<input>.bib` in the s
 ### Python module
 
 ```bash
-python -m bibcleaner.cli input.bib -o output.bib
+uv run python -m bibcleaner.cli input.bib -o output.bib
 ```
 
 ### Programmatic API
 
 ```python
-from bibcleaner import process_bibliography
+from bibcleaner import process_bibliography, process_bibliography_content
 
 process_bibliography("references.bib", "references_enriched.bib")
+
+cleaned = process_bibliography_content("@article{demo,title={Example}}")
+print(cleaned)
 ```
+
+### Web API
+
+Start the API locally:
+
+```bash
+uv run uvicorn bibcleaner.web_api:app --host 0.0.0.0 --port 8000 --reload
+```
+
+Health check:
+
+```bash
+curl http://localhost:8000/health
+```
+
+Clean a bibliography upload:
+
+```bash
+curl -X POST http://localhost:8000/clear-bib \
+  -F "file=@references.bib" \
+  -o cleaned_references.bib
+```
+
+The route `/clean-bib` is also available as an alias.
 
 ---
 
@@ -215,17 +224,40 @@ set CROSSREF_MAILTO=you@example.com
 ```
 
 ---
-
-## How it works
-
-```
-For every entry in the .bib file
-│
-├─ Does it contain an arXiv ID?
+ (file + in-memory processing)
+├── cli.py          Command-line interface
+├── crossref.py     CrossRef title search client
+├── dblp.py         DBLP title search client
+├── enricher.py     Enrichment pipeline logic
+├── openalex.py     OpenAlex title search client
+├── venues.py       Venue name normalization table (~35 venues)
+└── web_api.py      FastAPI service routes (/health, /clear-bib
 │   ├─ Yes →  Step 1: arXiv API  (fetch canonical authors + primaryclass)
 │   │         Step 2: DBLP       (find published venue — one request)
 │   │         Step 3: CrossRef   (title search fallback)
-│   │         Step 4: Semantic Scholar (arXiv ID lookup)
+│  Docker
+
+Build and run the API image:
+
+```bash
+docker build -t bibcleaner-api .
+docker run --rm -p 8000:8000 bibcleaner-api
+```
+
+Then test:
+
+```bash
+curl http://localhost:8000/health
+
+```
+
+Request example:
+
+```bash
+curl -X POST http://localhost:8000/clear-bib -F "file=@/path/to/file/file.bib" -o /path/to/output/file/output.bib
+```
+
+##  │         Step 4: Semantic Scholar (arXiv ID lookup)
 │   │         Step 5: OpenAlex   (last-resort title search)
 │   │         Step 6: If no venue found — normalize as clean @misc preprint
 │   │

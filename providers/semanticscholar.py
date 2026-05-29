@@ -13,8 +13,10 @@ def _is_published(paper: dict) -> bool:
         return False
 
     venue = (
-        (paper.get("publicationVenue") or {}).get("name") or paper.get("venue") or ""
-    ).lower().strip()
+        ((paper.get("publicationVenue") or {}).get("name") or paper.get("venue") or "")
+        .lower()
+        .strip()
+    )
     return venue not in _ARXIV_VENUES and "arxiv" not in venue
 
 

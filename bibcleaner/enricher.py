@@ -43,6 +43,7 @@ _oa_provider = OpenAlexClient()
 # arXiv ID extraction
 # ---------------------------------------------------------------------------
 
+
 def extract_arxiv_id(fields: dict) -> Optional[str]:
     """Return a bare arXiv ID (e.g. '2410.03834') from a BibTeX fields dict, or None."""
     if "eprint" in fields:
@@ -62,6 +63,7 @@ def extract_arxiv_id(fields: dict) -> Optional[str]:
 # ---------------------------------------------------------------------------
 # Field helpers
 # ---------------------------------------------------------------------------
+
 
 def _set_field(entry: Entry, key: str, value: str):
     for f in entry.fields:
@@ -87,7 +89,9 @@ def _is_truncated(author_str: str) -> bool:
 def _count_authors(author_str: str) -> int:
     if not author_str:
         return 0
-    return len([a for a in re.split(r"\band\b", author_str, flags=re.IGNORECASE) if a.strip()])
+    return len(
+        [a for a in re.split(r"\band\b", author_str, flags=re.IGNORECASE) if a.strip()]
+    )
 
 
 def _better_authors(candidate: list, current_str: str) -> bool:
@@ -102,6 +106,7 @@ def _better_authors(candidate: list, current_str: str) -> bool:
 # ---------------------------------------------------------------------------
 # Apply a data dict onto an Entry
 # ---------------------------------------------------------------------------
+
 
 def _apply(entry: Entry, data: dict, fields: dict):
     """Write enrichment data onto the entry in-place."""
@@ -141,7 +146,9 @@ def _apply(entry: Entry, data: dict, fields: dict):
     _remove_fields(entry, _ARXIV_FIELDS)
 
 
-def _normalize_preprint(entry: Entry, fields: dict, authors: list, primaryclass: Optional[str]):
+def _normalize_preprint(
+    entry: Entry, fields: dict, authors: list, primaryclass: Optional[str]
+):
     """Convert a confirmed-preprint entry to a clean @misc with eprint fields."""
     arxiv_id = extract_arxiv_id(fields)
     if not arxiv_id:
@@ -162,6 +169,7 @@ def _normalize_preprint(entry: Entry, fields: dict, authors: list, primaryclass:
 # ---------------------------------------------------------------------------
 # Public entry point
 # ---------------------------------------------------------------------------
+
 
 def enrich_entry(entry: Entry) -> bool:
     """Enrich an arXiv preprint entry with published venue and full author data.
@@ -187,7 +195,11 @@ def enrich_entry(entry: Entry) -> bool:
 
     title = fields.get("title", "")
     raw_author = fields.get("author", "")
-    authors = [a.strip() for a in re.split(r"\band\b", raw_author, flags=re.IGNORECASE) if a.strip()]
+    authors = [
+        a.strip()
+        for a in re.split(r"\band\b", raw_author, flags=re.IGNORECASE)
+        if a.strip()
+    ]
     year = fields.get("year")
     query = ProviderQuery(title=title, authors=authors, year=year, arxiv_id=arxiv_id)
 
@@ -224,16 +236,16 @@ def enrich_entry(entry: Entry) -> bool:
 
     # ---- Step 4: Semantic Scholar — arXiv ID (skip when DBLP/CrossRef found no venue) ----
     dblp_or_cr_knows = bool(
-        dblp_result.published_data
-        or dblp_pre_authors
-        or crossref_result.published_data
+        dblp_result.published_data or dblp_pre_authors or crossref_result.published_data
     )
     ss_result = None
     if not dblp_or_cr_knows:
         ss_result = _ss_provider.lookup(query)
         if ss_result.published_data:
             data = dict(ss_result.published_data)
-            if _better_authors(canonical_authors, _format_authors(data.get("authors", []))):
+            if _better_authors(
+                canonical_authors, _format_authors(data.get("authors", []))
+            ):
                 data["authors"] = canonical_authors
             _apply(entry, data, fields)
             logger.info(f"[SS] {entry.key}")
@@ -243,7 +255,9 @@ def enrich_entry(entry: Entry) -> bool:
         oa_result = _oa_provider.lookup(query)
         if oa_result.published_data:
             data = dict(oa_result.published_data)
-            if _better_authors(canonical_authors, _format_authors(data.get("authors", []))):
+            if _better_authors(
+                canonical_authors, _format_authors(data.get("authors", []))
+            ):
                 data["authors"] = canonical_authors
             _apply(entry, data, fields)
             logger.info(f"[OA] {entry.key}")
@@ -267,6 +281,7 @@ def enrich_entry(entry: Entry) -> bool:
 # ---------------------------------------------------------------------------
 # Venue-only normalization (runs on every entry, including non-arXiv ones)
 # ---------------------------------------------------------------------------
+
 
 def normalize_venue_fields(entry: Entry) -> bool:
     """Normalize booktitle / journal to canonical full venue names.

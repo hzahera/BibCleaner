@@ -7,8 +7,7 @@ import requests
 logger = logging.getLogger(__name__)
 
 _SS_FIELDS = (
-    "title,authors,year,venue,journal,"
-    "publicationVenue,externalIds,publicationTypes"
+    "title,authors,year,venue,journal,publicationVenue,externalIds,publicationTypes"
 )
 
 # Semantic Scholar public API: ~1 req/sec without a key, much higher with one.
@@ -44,7 +43,7 @@ def fetch_by_arxiv_id(arxiv_id: str, retries: int = 3) -> dict | None:
             if resp.status_code == 200:
                 return resp.json()
             if resp.status_code == 429:
-                wait = 10 * (2 ** attempt)  # 10s, 20s, 40s
+                wait = 10 * (2**attempt)  # 10s, 20s, 40s
                 logger.warning(f"Semantic Scholar rate-limited; retrying in {wait}s")
                 time.sleep(wait)
             elif resp.status_code == 404:

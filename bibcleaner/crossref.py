@@ -44,7 +44,9 @@ def search(title: str, rows: int = 5) -> list:
         resp = requests.get(
             _CROSSREF_URL,
             params=params,
-            headers={"User-Agent": "bibcleaner/0.1 (https://github.com/hzahera/bib-cleaner)"},
+            headers={
+                "User-Agent": "bibcleaner/0.1 (https://github.com/hzahera/bib-cleaner)"
+            },
             timeout=10,
         )
         if resp.status_code == 200:
@@ -83,8 +85,14 @@ def best_match(
 
         published = (item.get("published") or {}).get("date-parts", [[None]])[0]
         cr_year = str(published[0]) if published and published[0] else ""
-        year_score = 1.0 if year_str and cr_year == year_str else (
-            0.5 if year_str and cr_year and abs(int(cr_year) - int(year_str)) <= 1 else 0.0
+        year_score = (
+            1.0
+            if year_str and cr_year == year_str
+            else (
+                0.5
+                if year_str and cr_year and abs(int(cr_year) - int(year_str)) <= 1
+                else 0.0
+            )
         )
 
         score = 0.8 * sim + 0.2 * year_score

@@ -34,7 +34,9 @@ def fetch(arxiv_id: str) -> Optional[dict]:
         resp = requests.get(
             _ARXIV_API,
             params={"id_list": clean},
-            headers={"User-Agent": "bibcleaner/0.1 (https://github.com/hzahera/bib-cleaner)"},
+            headers={
+                "User-Agent": "bibcleaner/0.1 (https://github.com/hzahera/bib-cleaner)"
+            },
             timeout=10,
         )
         if resp.status_code != 200:
