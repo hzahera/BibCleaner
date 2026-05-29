@@ -143,6 +143,23 @@ curl -X POST http://localhost:8000/clear-bib \
 
 The route `/clean-bib` is also available as an alias.
 
+### Frontend with Docker Compose
+
+Start the full stack from the repository root:
+
+```bash
+make compose-up
+```
+
+This launches the API container on `http://localhost:8000` and the frontend on `http://localhost:8080`.
+The browser-facing frontend sends same-origin requests to `http://localhost:8080/api/clean-bib`, which nginx proxies to the API container.
+
+If you prefer the raw Docker command, use:
+
+```bash
+docker compose up --build
+```
+
 ---
 
 ## Example

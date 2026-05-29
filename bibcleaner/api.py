@@ -34,6 +34,9 @@ def fetch_by_arxiv_id(arxiv_id: str, retries: int = 3) -> dict | None:
     params = {"fields": _SS_FIELDS}
 
     api_key = os.environ.get("S2_API_KEY")
+    if not api_key:
+        logger.warning("No Semantic Scholar API key found. Request failed.")
+        return None
     headers = {"x-api-key": api_key} if api_key else {}
 
     for attempt in range(retries):
