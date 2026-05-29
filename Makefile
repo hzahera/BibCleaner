@@ -1,6 +1,6 @@
 .DEFAULT_GOAL := help
 
-.PHONY: help setup requirements format lint test
+.PHONY: help setup requirements format lint test compose-up
 
 help: ## Show available targets
 	@echo "Available targets:"
@@ -20,3 +20,6 @@ lint: ## Run lint checks with ruff
 
 test: ## Run test suite
 	uv run pytest
+
+compose-up: ## Start the API and frontend compose stack
+	docker compose up --build
