@@ -11,8 +11,6 @@ MAX_UPLOAD_BYTES = 10 * 1024 * 1024  # 10 MB safeguard
 _ALLOWED_CONTENT_TYPES = {
     "application/x-bibtex",
     "text/x-bibtex",
-    "text/plain",
-    "application/octet-stream",
 }
 
 app = FastAPI(title=APP_NAME, version=__version__)
@@ -37,7 +35,7 @@ async def clear_bib(file: UploadFile | None = File(default=None)) -> Response:
         raise HTTPException(status_code=400, detail="Only .bib files are accepted")
 
     content_type = (file.content_type or "").lower()
-    if content_type and content_type not in _ALLOWED_CONTENT_TYPES:
+    if content_type not in _ALLOWED_CONTENT_TYPES:
         raise HTTPException(
             status_code=400,
             detail="Unsupported content type for .bib upload",

@@ -70,6 +70,7 @@ pyyaml==6.0.3
     # via uvicorn
 requests==2.34.2
     # via bib-cleaner
+ruff==0.15.14
 starlette==1.2.0
     # via fastapi
 tomli==2.4.1 ; python_full_version < '3.11'
