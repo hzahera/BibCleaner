@@ -10,7 +10,7 @@ authors = [
 ]
 description = "Python toolkit for automated BibTeX metadata enrichment using Semantic Scholar API"
 readme = "README.md"
-requires-python = ">=3.8"
+requires-python = ">=3.10"
 classifiers = [
     "Programming Language :: Python :: 3",
     "License :: OSI Approved :: MIT License",
@@ -19,11 +19,21 @@ classifiers = [
 dependencies = [
     "requests>=2.25.0",
     "bibtexparser==2.0.0b9",
-    "tqdm>=4.65.0"
+    "tqdm>=4.65.0",
+    "fastapi>=0.116.0",
+    "uvicorn[standard]>=0.35.0",
+    "python-multipart>=0.0.20"
 ]
 
 [project.scripts]
 bibcleaner = "bibcleaner.cli:main"
+
+[dependency-groups]
+dev = [
+    "pytest>=8.3.0",
+    "httpx2>=2.0.0",
+    "ruff>=0.15.14",
+]
 
 [tool.setuptools]
 packages = ["bibcleaner", "providers"]

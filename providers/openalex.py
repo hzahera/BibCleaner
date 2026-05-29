@@ -193,7 +193,7 @@ class OpenAlexClient(Provider):
         if not work:
             return None
 
-        source = ((work.get("primary_location") or {}).get("source") or {})
+        source = (work.get("primary_location") or {}).get("source") or {}
         biblio = work.get("biblio") or {}
         authorships = work.get("authorships") or []
 

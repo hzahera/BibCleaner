@@ -3,16 +3,24 @@ from tqdm import tqdm
 from .enricher import enrich_entry, normalize_venue_fields
 
 
-def process_bibliography(input_path: str, output_path: str):
-    """Parse, enrich, and save the bibliography."""
-    print(f"Reading {input_path}...")
+def process_bibliography_content(content: str | bytes) -> str:
+    """Parse, enrich, and return a BibTeX string.
 
-    with open(input_path, "r", encoding="utf-8") as fh:
-        bibtex_str = fh.read()
+    Accepts UTF-8 encoded bytes or a plain text string.
+    """
+    if isinstance(content, bytes):
+        try:
+            bibtex_str = content.decode("utf-8")
+        except UnicodeDecodeError as exc:
+            raise ValueError("Input file must be UTF-8 encoded") from exc
+    else:
+        bibtex_str = content
+
+    if not bibtex_str.strip():
+        raise ValueError("Input bibliography is empty")
 
     library = bibtexparser.parse_string(bibtex_str)
     entries = [b for b in library.blocks if isinstance(b, bibtexparser.model.Entry)]
-    print(f"Loaded {len(entries)} entries. Starting enrichment...")
 
     enriched = venue_normalized = 0
     for entry in tqdm(entries, desc="Processing entries"):
@@ -38,9 +46,22 @@ def process_bibliography(input_path: str, output_path: str):
         f"{venue_normalized} additional venue name(s) normalized "
         f"({total_changed} total changes)."
     )
+
+    return bibtexparser.write_string(library)
+
+
+def process_bibliography(input_path: str, output_path: str):
+    """Parse, enrich, and save the bibliography."""
+    print(f"Reading {input_path}...")
+
+    with open(input_path, "r", encoding="utf-8") as fh:
+        bibtex_str = fh.read()
+
+    print("Starting enrichment...")
+    cleaned_bib = process_bibliography_content(bibtex_str)
     print(f"Writing to {output_path}...")
 
     with open(output_path, "w", encoding="utf-8") as fh:
-        fh.write(bibtexparser.write_string(library))
+        fh.write(cleaned_bib)
 
     print(f"Saved to {output_path}")

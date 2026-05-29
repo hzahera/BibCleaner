@@ -6,13 +6,12 @@ from .semanticscholar import SemanticScholarProvider
 from .openalex import OpenAlexClient
 
 __all__ = [
-	"Provider",
-	"ProviderQuery",
-	"ProviderResult",
-	"ArxivProvider",
-	"DblpProvider",
-	"CrossrefProvider",
-	"SemanticScholarProvider",
-	"OpenAlexClient",
+    "Provider",
+    "ProviderQuery",
+    "ProviderResult",
+    "ArxivProvider",
+    "DblpProvider",
+    "CrossrefProvider",
+    "SemanticScholarProvider",
+    "OpenAlexClient",
 ]
-

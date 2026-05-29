@@ -95,7 +95,9 @@ def _fetch(query: str, max_results: int) -> list:
             return [h["info"] for h in hits if "info" in h]
         except requests.exceptions.ConnectionError as exc:
             logger.debug(f"DBLP connection error (attempt {attempt + 1}): {exc}")
-            import time; time.sleep(1 + attempt)
+            import time
+
+            time.sleep(1 + attempt)
         except Exception as exc:
             logger.warning(f"DBLP request failed: {exc}")
             break
@@ -148,9 +150,14 @@ def lookup(
             continue
 
         hit_year = str(info.get("year", ""))
-        year_ok = not year_str or hit_year == year_str or (
-            hit_year.isdigit() and year_str.isdigit()
-            and abs(int(hit_year) - int(year_str)) <= 1
+        year_ok = (
+            not year_str
+            or hit_year == year_str
+            or (
+                hit_year.isdigit()
+                and year_str.isdigit()
+                and abs(int(hit_year) - int(year_str)) <= 1
+            )
         )
         if not year_ok:
             continue
