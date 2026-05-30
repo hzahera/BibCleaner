@@ -1,9 +1,11 @@
 """
 Venue name normalization.
 
-Maps every known abbreviation, DBLP shorthand, Semantic Scholar variant, and
-user-entered shortcut to a single canonical full name.  Matching is done on a
-stripped-down key (lowercase, no punctuation, no leading "proceedings of (the)").
+Canonical format: "Full Name (ABBR)"  e.g. "International Conference on
+Learning Representations (ICLR)".  Every known abbreviation, DBLP shorthand,
+Semantic Scholar variant, and user-entered shortcut maps to that single form.
+Matching is done on a stripped-down key (lowercase, no punctuation — so the
+parenthesised abbreviation is ignored — and no leading "proceedings of (the)").
 """
 
 import re
@@ -11,14 +13,14 @@ from typing import Optional
 
 # ---------------------------------------------------------------------------
 # Canonical venue registry
-# Each tuple: (canonical_full_name, [variant strings to match against])
+# Each tuple: (canonical_name, [variant strings to match against])
 # Variants are matched after the same normalization applied to inputs.
 # ---------------------------------------------------------------------------
 
 _REGISTRY: list[tuple[str, list[str]]] = [
     # ── Neural Information Processing Systems ───────────────────────────────
     (
-        "Advances in Neural Information Processing Systems",
+        "Advances in Neural Information Processing Systems (NeurIPS)",
         [
             "neurips",
             "nips",
@@ -31,7 +33,7 @@ _REGISTRY: list[tuple[str, list[str]]] = [
     ),
     # ── ICML ────────────────────────────────────────────────────────────────
     (
-        "International Conference on Machine Learning",
+        "International Conference on Machine Learning (ICML)",
         [
             "icml",
             "international conference on machine learning",
@@ -41,7 +43,7 @@ _REGISTRY: list[tuple[str, list[str]]] = [
     ),
     # ── ICLR ────────────────────────────────────────────────────────────────
     (
-        "International Conference on Learning Representations",
+        "International Conference on Learning Representations (ICLR)",
         [
             "iclr",
             "international conference on learning representations",
@@ -50,7 +52,7 @@ _REGISTRY: list[tuple[str, list[str]]] = [
     ),
     # ── AAAI ────────────────────────────────────────────────────────────────
     (
-        "AAAI Conference on Artificial Intelligence",
+        "AAAI Conference on Artificial Intelligence (AAAI)",
         [
             "aaai",
             "aaai conference on artificial intelligence",
@@ -60,7 +62,7 @@ _REGISTRY: list[tuple[str, list[str]]] = [
     ),
     # ── IJCAI ───────────────────────────────────────────────────────────────
     (
-        "International Joint Conference on Artificial Intelligence",
+        "International Joint Conference on Artificial Intelligence (IJCAI)",
         [
             "ijcai",
             "international joint conference on artificial intelligence",
@@ -69,7 +71,7 @@ _REGISTRY: list[tuple[str, list[str]]] = [
     ),
     # ── UAI ─────────────────────────────────────────────────────────────────
     (
-        "Conference on Uncertainty in Artificial Intelligence",
+        "Conference on Uncertainty in Artificial Intelligence (UAI)",
         [
             "uai",
             "uncertainty in artificial intelligence",
@@ -78,7 +80,7 @@ _REGISTRY: list[tuple[str, list[str]]] = [
     ),
     # ── AISTATS ─────────────────────────────────────────────────────────────
     (
-        "International Conference on Artificial Intelligence and Statistics",
+        "International Conference on Artificial Intelligence and Statistics (AISTATS)",
         [
             "aistats",
             "international conference on artificial intelligence and statistics",
@@ -87,18 +89,19 @@ _REGISTRY: list[tuple[str, list[str]]] = [
     ),
     # ── ECML/PKDD ───────────────────────────────────────────────────────────
     (
-        "European Conference on Machine Learning and Principles and Practice of Knowledge Discovery in Databases",
+        "European Conference on Machine Learning and Principles and Practice of Knowledge Discovery in Databases (ECML-PKDD)",
         [
             "ecml",
             "ecml pkdd",
             "ecml/pkdd",
+            "ecml-pkdd",
             "european conference on machine learning",
             "machine learning and knowledge discovery in databases",
         ],
     ),
     # ── ACL ─────────────────────────────────────────────────────────────────
     (
-        "Annual Meeting of the Association for Computational Linguistics",
+        "Annual Meeting of the Association for Computational Linguistics (ACL)",
         [
             "acl",
             "annual meeting of the association for computational linguistics",
@@ -109,7 +112,7 @@ _REGISTRY: list[tuple[str, list[str]]] = [
     ),
     # ── EMNLP ───────────────────────────────────────────────────────────────
     (
-        "Conference on Empirical Methods in Natural Language Processing",
+        "Conference on Empirical Methods in Natural Language Processing (EMNLP)",
         [
             "emnlp",
             "empirical methods in natural language processing",
@@ -119,7 +122,7 @@ _REGISTRY: list[tuple[str, list[str]]] = [
     ),
     # ── NAACL ───────────────────────────────────────────────────────────────
     (
-        "Annual Conference of the North American Chapter of the Association for Computational Linguistics",
+        "Annual Conference of the North American Chapter of the Association for Computational Linguistics (NAACL)",
         [
             "naacl",
             "naacl-hlt",
@@ -130,7 +133,7 @@ _REGISTRY: list[tuple[str, list[str]]] = [
     ),
     # ── EACL ────────────────────────────────────────────────────────────────
     (
-        "Conference of the European Chapter of the Association for Computational Linguistics",
+        "Conference of the European Chapter of the Association for Computational Linguistics (EACL)",
         [
             "eacl",
             "european chapter of the association for computational linguistics",
@@ -139,7 +142,7 @@ _REGISTRY: list[tuple[str, list[str]]] = [
     ),
     # ── CoNLL ───────────────────────────────────────────────────────────────
     (
-        "Conference on Computational Natural Language Learning",
+        "Conference on Computational Natural Language Learning (CoNLL)",
         [
             "conll",
             "computational natural language learning",
@@ -148,7 +151,7 @@ _REGISTRY: list[tuple[str, list[str]]] = [
     ),
     # ── COLING ──────────────────────────────────────────────────────────────
     (
-        "International Conference on Computational Linguistics",
+        "International Conference on Computational Linguistics (COLING)",
         [
             "coling",
             "international conference on computational linguistics",
@@ -156,7 +159,7 @@ _REGISTRY: list[tuple[str, list[str]]] = [
     ),
     # ── CVPR ────────────────────────────────────────────────────────────────
     (
-        "IEEE/CVF Conference on Computer Vision and Pattern Recognition",
+        "IEEE/CVF Conference on Computer Vision and Pattern Recognition (CVPR)",
         [
             "cvpr",
             "computer vision and pattern recognition",
@@ -167,7 +170,7 @@ _REGISTRY: list[tuple[str, list[str]]] = [
     ),
     # ── ICCV ────────────────────────────────────────────────────────────────
     (
-        "IEEE/CVF International Conference on Computer Vision",
+        "IEEE/CVF International Conference on Computer Vision (ICCV)",
         [
             "iccv",
             "international conference on computer vision",
@@ -178,7 +181,7 @@ _REGISTRY: list[tuple[str, list[str]]] = [
     ),
     # ── ECCV ────────────────────────────────────────────────────────────────
     (
-        "European Conference on Computer Vision",
+        "European Conference on Computer Vision (ECCV)",
         [
             "eccv",
             "european conference on computer vision",
@@ -186,7 +189,7 @@ _REGISTRY: list[tuple[str, list[str]]] = [
     ),
     # ── KDD ─────────────────────────────────────────────────────────────────
     (
-        "ACM SIGKDD Conference on Knowledge Discovery and Data Mining",
+        "ACM SIGKDD Conference on Knowledge Discovery and Data Mining (KDD)",
         [
             "kdd",
             "sigkdd",
@@ -197,7 +200,7 @@ _REGISTRY: list[tuple[str, list[str]]] = [
     ),
     # ── WWW / TheWebConf ────────────────────────────────────────────────────
     (
-        "ACM Web Conference",
+        "ACM Web Conference (WWW)",
         [
             "www",
             "thewebconf",
@@ -209,7 +212,7 @@ _REGISTRY: list[tuple[str, list[str]]] = [
     ),
     # ── SIGIR ───────────────────────────────────────────────────────────────
     (
-        "ACM SIGIR Conference on Research and Development in Information Retrieval",
+        "ACM SIGIR Conference on Research and Development in Information Retrieval (SIGIR)",
         [
             "sigir",
             "research and development in information retrieval",
@@ -219,7 +222,7 @@ _REGISTRY: list[tuple[str, list[str]]] = [
     ),
     # ── RecSys ──────────────────────────────────────────────────────────────
     (
-        "ACM Conference on Recommender Systems",
+        "ACM Conference on Recommender Systems (RecSys)",
         [
             "recsys",
             "recommender systems",
@@ -229,7 +232,7 @@ _REGISTRY: list[tuple[str, list[str]]] = [
     ),
     # ── CIKM ────────────────────────────────────────────────────────────────
     (
-        "ACM International Conference on Information and Knowledge Management",
+        "ACM International Conference on Information and Knowledge Management (CIKM)",
         [
             "cikm",
             "acm international conference on information and knowledge management",
@@ -238,7 +241,7 @@ _REGISTRY: list[tuple[str, list[str]]] = [
     ),
     # ── WSDM ────────────────────────────────────────────────────────────────
     (
-        "ACM International Conference on Web Search and Data Mining",
+        "ACM International Conference on Web Search and Data Mining (WSDM)",
         [
             "wsdm",
             "web search and data mining",
@@ -247,7 +250,7 @@ _REGISTRY: list[tuple[str, list[str]]] = [
     ),
     # ── ACM MM ──────────────────────────────────────────────────────────────
     (
-        "ACM International Conference on Multimedia",
+        "ACM International Conference on Multimedia (ACM MM)",
         [
             "acm mm",
             "acmmm",
@@ -258,7 +261,7 @@ _REGISTRY: list[tuple[str, list[str]]] = [
     ),
     # ── VLDB ────────────────────────────────────────────────────────────────
     (
-        "Proceedings of the VLDB Endowment",
+        "Proceedings of the VLDB Endowment (VLDB)",
         [
             "vldb",
             "very large data bases",
@@ -268,7 +271,7 @@ _REGISTRY: list[tuple[str, list[str]]] = [
     ),
     # ── SIGMOD ──────────────────────────────────────────────────────────────
     (
-        "ACM SIGMOD International Conference on Management of Data",
+        "ACM SIGMOD International Conference on Management of Data (SIGMOD)",
         [
             "sigmod",
             "acm sigmod international conference on management of data",
@@ -278,7 +281,7 @@ _REGISTRY: list[tuple[str, list[str]]] = [
     ),
     # ── ICDE ────────────────────────────────────────────────────────────────
     (
-        "IEEE International Conference on Data Engineering",
+        "IEEE International Conference on Data Engineering (ICDE)",
         [
             "icde",
             "ieee international conference on data engineering",
@@ -295,7 +298,7 @@ _REGISTRY: list[tuple[str, list[str]]] = [
     ),
     # ── ICASSP ──────────────────────────────────────────────────────────────
     (
-        "IEEE International Conference on Acoustics, Speech and Signal Processing",
+        "IEEE International Conference on Acoustics, Speech and Signal Processing (ICASSP)",
         [
             "icassp",
             "ieee international conference on acoustics speech and signal processing",
@@ -306,7 +309,7 @@ _REGISTRY: list[tuple[str, list[str]]] = [
     # Journals
     # ─────────────────────────────────────────────────────────────────────────
     (
-        "Journal of Machine Learning Research",
+        "Journal of Machine Learning Research (JMLR)",
         [
             "jmlr",
             "journal of machine learning research",
@@ -314,7 +317,7 @@ _REGISTRY: list[tuple[str, list[str]]] = [
         ],
     ),
     (
-        "Transactions of the Association for Computational Linguistics",
+        "Transactions of the Association for Computational Linguistics (TACL)",
         [
             "tacl",
             "transactions of the association for computational linguistics",
@@ -322,14 +325,14 @@ _REGISTRY: list[tuple[str, list[str]]] = [
         ],
     ),
     (
-        "Transactions on Machine Learning Research",
+        "Transactions on Machine Learning Research (TMLR)",
         [
             "tmlr",
             "transactions on machine learning research",
         ],
     ),
     (
-        "IEEE Transactions on Pattern Analysis and Machine Intelligence",
+        "IEEE Transactions on Pattern Analysis and Machine Intelligence (TPAMI)",
         [
             "tpami",
             "pami",
@@ -338,7 +341,7 @@ _REGISTRY: list[tuple[str, list[str]]] = [
         ],
     ),
     (
-        "IEEE Transactions on Neural Networks and Learning Systems",
+        "IEEE Transactions on Neural Networks and Learning Systems (TNNLS)",
         [
             "tnnls",
             "ieee transactions on neural networks and learning systems",
@@ -388,7 +391,12 @@ _REGISTRY: list[tuple[str, list[str]]] = [
 
 
 def _key(text: str) -> str:
-    """Normalise a venue string to a match key."""
+    """Normalise a venue string to a match key.
+
+    Strips leading boilerplate, removes all punctuation (including parentheses,
+    so that 'ICLR' and '... (ICLR)' reduce to the same token set), and collapses
+    whitespace.
+    """
     t = text.lower()
     # Strip leading "proceedings of (the)" and similar
     t = re.sub(r"^(proceedings of (the )?|workshop on |the )", "", t)
@@ -407,7 +415,7 @@ for _canonical, _variants in _REGISTRY:
 
 
 def normalize_venue(name: str) -> Optional[str]:
-    """Return the canonical full venue name for *name*, or None if unknown."""
+    """Return the canonical 'Full Name (ABBR)' for *name*, or None if unknown."""
     if not name:
         return None
     return _LOOKUP.get(_key(name))

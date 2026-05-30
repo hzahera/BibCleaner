@@ -240,8 +240,7 @@ class OpenAlexClient(Provider):
 
         return out
 
-    def lookup(self, query: ProviderQuery) -> ProviderResult:
-        work = self.best_match(query.title, query.authors, query.year)
+    def _published_from_work(self, work: Optional[Dict]) -> ProviderResult:
         if not work:
             return ProviderResult()
 
@@ -250,7 +249,16 @@ class OpenAlexClient(Provider):
             return ProviderResult()
 
         venue = (normalized.get("journal") or normalized.get("booktitle") or "").lower()
-        if "arxiv" in venue:
-            return ProviderResult()
+        if not venue or "arxiv" in venue:
+            return ProviderResult(matched=True)
 
-        return ProviderResult(published_data=normalized)
+        return ProviderResult(published_data=normalized, matched=True)
+
+    def lookup(self, query: ProviderQuery) -> ProviderResult:
+        # Exact DOI resolution takes precedence over fuzzy title search.
+        if query.doi:
+            result = self._published_from_work(self.fetch_by_doi(query.doi))
+            if result.published_data:
+                return result
+
+        return self._published_from_work(self.best_match(query.title, query.authors, query.year))
