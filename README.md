@@ -1,12 +1,16 @@
-# BibCleaner
+<div align="center">
 
-**Developed for researchers, by researchers.**
+<img src="logo.png" alt="BibCleaner logo" width="360">
 
 **A Python toolkit for automated BibTeX metadata enrichment and venue normalization**
+
+_Developed for researchers, by researchers._
 
 [![Python 3.10+](https://img.shields.io/badge/Python-3.10+-blue.svg)](https://www.python.org/downloads/)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
 [![Code style: black](https://img.shields.io/badge/code%20style-black-000000.svg)](https://github.com/psf/black)
+
+</div>
 
 ---
 
@@ -33,26 +37,29 @@ BibCleaner automatically cleans and enriches BibTeX bibliographies. It detects a
 
 | Input (any format) | Canonical output |
 |---|---|
-| `NeurIPS` / `NIPS` / `neural inf process syst` | `Advances in Neural Information Processing Systems` |
-| `ICLR` | `International Conference on Learning Representations` |
-| `ICML` | `International Conference on Machine Learning` |
-| `ACL` | `Annual Meeting of the Association for Computational Linguistics` |
-| `TACL` | `Transactions of the Association for Computational Linguistics` |
-| `CVPR` | `IEEE/CVF Conference on Computer Vision and Pattern Recognition` |
+| `NeurIPS` / `NIPS` / `neural inf process syst` | `Advances in Neural Information Processing Systems (NeurIPS)` |
+| `ICLR` | `International Conference on Learning Representations (ICLR)` |
+| `ICML` | `International Conference on Machine Learning (ICML)` |
+| `ACL` | `Annual Meeting of the Association for Computational Linguistics (ACL)` |
+| `TACL` | `Transactions of the Association for Computational Linguistics (TACL)` |
+| `CVPR` | `IEEE/CVF Conference on Computer Vision and Pattern Recognition (CVPR)` |
 
 ---
 
 ## Data Sources
 
-BibCleaner queries four sources in order, stopping as soon as a published venue is found:
+Each source is a self-contained `Provider` (in the `providers/` package) exposing a uniform `lookup()`. BibCleaner queries them in order, stopping as soon as a published venue is found:
 
 | Priority | Source | Used for |
 |---|---|---|
-| 1 | **arXiv API** | Canonical author names and `primaryclass` for every arXiv entry |
-| 2 | **DBLP** | Published venue lookup — fast, no rate limits, authoritative for CS |
-| 3 | **CrossRef** | Journal and proceedings metadata; covers ACM, IEEE, Springer |
-| 4 | **Semantic Scholar** | Fallback arXiv ID lookup when DBLP and CrossRef find nothing |
-| 5 | **OpenAlex** | Last-resort title search |
+| 1 | **arXiv API** | Canonical author names, `primaryclass`, and the author-declared venue (`journal_ref` / `doi`) |
+| 2 | **DOI lookup** | Exact resolution via CrossRef → OpenAlex when a DOI is known — no fuzzy matching |
+| 3 | **DBLP** | Title search — fast, no rate limits, authoritative for CS |
+| 4 | **CrossRef** | Title search; journal and proceedings metadata (ACM, IEEE, Springer) |
+| 5 | **Semantic Scholar** | Fallback arXiv-ID lookup when DBLP and CrossRef find nothing |
+| 6 | **OpenAlex** | Last-resort title search |
+
+When no published venue is found but the authors have declared one on arXiv (`journal_ref`), BibCleaner uses it — but only if it maps to a known canonical venue, so no noisy metadata is ever written.
 
 ---
 
@@ -195,7 +202,7 @@ docker compose up --build
 @inproceedings{madaan2023selfrefine,
   title     = {Self-Refine: Iterative Refinement with Self-Feedback},
   author    = {Aman Madaan and Niket Tandon and Prakhar Gupta and ...},
-  booktitle = {Advances in Neural Information Processing Systems},
+  booktitle = {Advances in Neural Information Processing Systems (NeurIPS)},
   year      = {2023}
 }
 
@@ -212,7 +219,7 @@ docker compose up --build
 @inproceedings{existing,
   title     = {Attention Is All You Need},
   author    = {Vaswani, Ashish and others},
-  booktitle = {Advances in Neural Information Processing Systems},
+  booktitle = {Advances in Neural Information Processing Systems (NeurIPS)},
   year      = {2017}
 }
 ```
@@ -241,18 +248,8 @@ set CROSSREF_MAILTO=you@example.com
 ```
 
 ---
- (file + in-memory processing)
-├── cli.py          Command-line interface
-├── crossref.py     CrossRef title search client
-├── dblp.py         DBLP title search client
-├── enricher.py     Enrichment pipeline logic
-├── openalex.py     OpenAlex title search client
-├── venues.py       Venue name normalization table (~35 venues)
-└── web_api.py      FastAPI service routes (/health, /clear-bib
-│   ├─ Yes →  Step 1: arXiv API  (fetch canonical authors + primaryclass)
-│   │         Step 2: DBLP       (find published venue — one request)
-│   │         Step 3: CrossRef   (title search fallback)
-│  Docker
+
+## Docker
 
 Build and run the API image:
 
@@ -265,18 +262,32 @@ Then test:
 
 ```bash
 curl http://localhost:8000/health
-
 ```
 
 Request example:
 
 ```bash
-curl -X POST http://localhost:8000/clear-bib -F "file=@/path/to/file/file.bib" -o /path/to/output/file/output.bib
+curl -X POST http://localhost:8000/clear-bib \
+  -F "file=@/path/to/references.bib" \
+  -o cleaned_references.bib
 ```
 
-##  │         Step 4: Semantic Scholar (arXiv ID lookup)
-│   │         Step 5: OpenAlex   (last-resort title search)
-│   │         Step 6: If no venue found — normalize as clean @misc preprint
+---
+
+## How it works
+
+```
+For every entry in the .bib file
+│
+├─ Does it contain an arXiv ID?
+│   ├─ Yes →  Step 1: arXiv API  (authors + category + declared journal_ref / doi)
+│   │         Step 2: DOI lookup  (CrossRef → OpenAlex, exact — if a DOI is known)
+│   │         Step 3: DBLP        (title search — published venue, one request)
+│   │         Step 4: CrossRef    (title search)
+│   │         Step 5: Semantic Scholar (arXiv-ID lookup)
+│   │         Step 6: OpenAlex    (last-resort title search)
+│   │         Step 7: journal_ref (author-declared venue, known venues only)
+│   │         else → normalize as clean @misc preprint
 │   │
 │   └─ No  →  Normalize booktitle / journal to canonical full name
 │
@@ -289,15 +300,19 @@ curl -X POST http://localhost:8000/clear-bib -F "file=@/path/to/file/file.bib" -
 
 ```
 bibcleaner/
-├── api.py          Semantic Scholar arXiv ID client
-├── arxiv_api.py    arXiv Atom API client (canonical authors)
-├── bibcleaner.py   Main orchestration
-├── cli.py          Command-line interface
-├── crossref.py     CrossRef title search client
-├── dblp.py         DBLP title search client
-├── enricher.py     Enrichment pipeline logic
-├── openalex.py     OpenAlex title search client
-└── venues.py       Venue name normalization table (~35 venues)
+├── bibcleaner.py       Orchestration (parse → enrich → write; file + in-memory)
+├── cli.py              Command-line interface
+├── enricher.py         Enrichment pipeline (drives the providers)
+├── venues.py           Venue name normalization table (~40 venues)
+└── web_api.py          FastAPI service routes (/health, /clean-bib)
+
+providers/              One module per data source, uniform Provider interface
+├── provider.py         Provider ABC + ProviderQuery / ProviderResult
+├── arxiv.py            arXiv Atom API (authors, category, journal_ref, doi)
+├── dblp.py             DBLP title search
+├── crossref.py         CrossRef DOI + title search
+├── semanticscholar.py  Semantic Scholar arXiv-ID lookup
+└── openalex.py         OpenAlex DOI + title search
 ```
 
 ---
