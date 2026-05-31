@@ -1,7 +1,8 @@
 import bibtexparser
 from tqdm import tqdm
 
-from .enricher import enrich_entry, normalize_venue_fields
+from .enricher import enrich_entry, normalize_venue_fields, extract_arxiv_id
+from .providers.arxiv import fetch_many as _arxiv_fetch_many
 from .latex import protect_title_caps
 from .dedup import deduplicate
 from .citations import prune_unused, rewrite_tex as rewrite_tex_files
@@ -57,6 +58,20 @@ def process_bibliography_content(
 
     library = bibtexparser.parse_string(bibtex_str)
     entries = [b for b in library.blocks if isinstance(b, bibtexparser.model.Entry)]
+
+    # ---- 0. Warm the arXiv cache in one batched request (avoids per-entry
+    #         calls that trip arXiv's rate limit). ----
+    if enrich:
+        arxiv_ids = []
+        for entry in entries:
+            aid = extract_arxiv_id({f.key: f.value for f in entry.fields})
+            if aid:
+                arxiv_ids.append(aid)
+        if arxiv_ids:
+            try:
+                _arxiv_fetch_many(arxiv_ids)
+            except Exception as exc:  # never let prefetch block processing
+                print(f"  Warning: arXiv prefetch failed: {exc}")
 
     # ---- 1. Enrich, normalize venues, protect capitalization ----
     enriched = venue_normalized = caps = 0
