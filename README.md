@@ -2,7 +2,7 @@
 
 <picture>
   <source media="(prefers-color-scheme: dark)" srcset="logo-dark.png">
-  <img src="logo.png" alt="BibCleaner" width="440">
+  <img src="https://github.com/hzahera/BibCleaner/blob/refactor-providers/logo.png" alt="BibCleaner" width="440">
 </picture>
 
 ### A tool that you run before every submission.
