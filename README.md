@@ -340,6 +340,11 @@ All data sources work without a key. Keys unlock higher rate limits for large bi
 | `S2_API_KEY` | Semantic Scholar | <https://www.semanticscholar.org/product/api#api-key-form> |
 | `CROSSREF_MAILTO` | CrossRef polite pool | Any valid email address |
 
+> **Seeing `Semantic Scholar rate-limited`?** Without a key, the shared anonymous
+> pool is heavily throttled — BibCleaner now just **skips** Semantic Scholar when
+> it's rate-limited (it's only a fallback source, so enrichment continues via
+> arXiv/DBLP/CrossRef/OpenAlex). Set `S2_API_KEY` to use it reliably.
+
 ```bash
 # macOS / Linux
 export S2_API_KEY=your_key_here

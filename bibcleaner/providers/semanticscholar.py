@@ -50,6 +50,11 @@ def fetch_by_arxiv_id(arxiv_id: str, retries: int = 3) -> Optional[dict]:
             if resp.status_code == 200:
                 return resp.json()
             if resp.status_code == 429:
+                # Without a key, SS is a low-value fallback and the shared pool
+                # is aggressively throttled — skip fast instead of stalling.
+                if not api_key:
+                    logger.debug("Semantic Scholar rate-limited (no API key); skipping")
+                    break
                 wait = 10 * (2**attempt)  # 10s, 20s, 40s
                 logger.warning(f"Semantic Scholar rate-limited; retrying in {wait}s")
                 time.sleep(wait)
