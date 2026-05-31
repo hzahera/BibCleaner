@@ -3,10 +3,10 @@ requires = ["setuptools>=61.0"]
 build-backend = "setuptools.build_meta"
 
 [project]
-name = "bib-cleaner"
-version = "0.1.0"
+name = "bib-cleaner-tool"
+version = "0.1.2"
 authors = [
-  { name="Hamada Zahera" }
+  { name="Hamada Zahera, Italo Lopey"}
 ]
 description = "Automated BibTeX cleaning: replace arXiv preprints with published venues, normalize venue names, and tidy entries for LaTeX."
 readme = "README.md"
@@ -26,9 +26,16 @@ dependencies = [
     "requests>=2.25.0",
     "bibtexparser==2.0.0b9",
     "tqdm>=4.65.0",
+]
+
+[project.optional-dependencies]
+# Web service (FastAPI app). CLI users don't need this:
+#   pip install bib-cleaner-tool          # CLI only
+#   pip install "bib-cleaner-tool[web]"   # + HTTP API
+web = [
     "fastapi>=0.116.0",
     "uvicorn[standard]>=0.35.0",
-    "python-multipart>=0.0.20"
+    "python-multipart>=0.0.20",
 ]
 
 [project.urls]

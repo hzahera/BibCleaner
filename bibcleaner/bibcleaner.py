@@ -4,7 +4,8 @@ from tqdm import tqdm
 from .enricher import enrich_entry, normalize_venue_fields
 from .latex import protect_title_caps
 from .dedup import deduplicate
-from .citations import prune_unused
+from .citations import prune_unused, rewrite_tex as rewrite_tex_files
+from .keys import normalize_keys as normalize_entry_keys
 
 
 def _protect_caps(entry) -> bool:
@@ -25,18 +26,23 @@ def process_bibliography_content(
     protect_caps: bool = True,
     dedup: bool = False,
     cited_keys=None,
+    normalize_keys: bool = False,
+    rewrite_tex=None,
     progress=None,
 ) -> str:
     """Parse, clean, and return a BibTeX string.
 
     Parameters
     ----------
-    content       : UTF-8 bytes or str of BibTeX source.
-    enrich        : query online sources to replace arXiv preprints (default on).
-    protect_caps  : brace-protect title capitalization, e.g. {BERT} (default on).
-    dedup         : merge duplicate entries; the key remap is printed.
-    cited_keys    : if given (a set of keys), keep only entries cited there.
-    progress      : optional callable(done, total) invoked per processed entry.
+    content        : UTF-8 bytes or str of BibTeX source.
+    enrich         : query online sources to replace arXiv preprints (default on).
+    protect_caps   : brace-protect title capitalization, e.g. {BERT} (default on).
+    dedup          : merge duplicate entries; the key remap is printed.
+    cited_keys     : if given (a set of keys), keep only entries cited there.
+    normalize_keys : rewrite citation keys to a consistent surnameYYYYword form.
+    rewrite_tex    : if given (a list of .tex paths), apply the resulting key
+                     remap (dedup + normalization) to those files in place.
+    progress       : optional callable(done, total) invoked per processed entry.
     """
     if isinstance(content, bytes):
         try:
@@ -113,7 +119,27 @@ def process_bibliography_content(
         if dropped:
             print(f"Pruned {len(dropped)} uncited entrie(s).")
 
-    # ---- 4. Rebuild the library if entry set changed ----
+    # ---- 4. Normalize citation keys ----
+    key_remap = {}
+    if normalize_keys:
+        key_remap = normalize_entry_keys(entries)
+        if key_remap:
+            print(f"Normalized {len(key_remap)} citation key(s).")
+
+    # ---- 5. Rewrite .tex citations with the full remap (dedup + normalization) ----
+    if rewrite_tex:
+        final_remap = dict(key_remap)
+        for dropped_key, survivor in remap.items():  # remap = dedup result
+            final_remap[dropped_key] = key_remap.get(survivor, survivor)
+        counts = rewrite_tex_files(rewrite_tex, final_remap)
+        total_refs = sum(counts.values())
+        if total_refs:
+            print(
+                f"Rewrote {total_refs} citation reference(s) across "
+                f"{len(counts)} file(s)."
+            )
+
+    # ---- 6. Rebuild the library if entry set changed ----
     if cited_keys is not None or dedup:
         out = bibtexparser.Library()
         for block in library.blocks:

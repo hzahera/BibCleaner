@@ -53,6 +53,7 @@ BibCleaner automatically cleans and enriches BibTeX bibliographies. It detects a
 - **Title capitalization protection** — brace-protects acronyms and inter-capped words so sentence-casing styles can't mangle them: `BERT: ... for ImageNet` → `{BERT}: ... for {ImageNet}`. Ordinary Title-Case words are left for the bib style; already-braced text and math (`$...$`) are untouched.
 - **Duplicate merging** (`--dedup`) — collapses entries that share a DOI, arXiv ID, or title+year. Keeps the richest (published beats preprint), folds in any missing fields, and prints the `old → new` citation-key remap.
 - **Used-citation pruning** (`--keep-cited`) — keeps only entries actually `\cite`d in your `.tex`/`.aux`, and warns about cited keys that have no entry (the dreaded `[?]`). Honours `\nocite{*}`.
+- **Citation-key normalization** (`--normalize-keys`) — rewrites keys to a consistent `surnameYYYYword` form (e.g. `vaswani2017attention`), with deterministic `a`/`b` suffixes on collision. Paired with `--rewrite-tex`, it updates every `\cite{…}` in your `.tex` to match — so you get clean keys *without* breaking references.
 
 ---
 
@@ -73,38 +74,44 @@ When no published venue is found but the authors have declared one on arXiv (`jo
 
 ---
 
-## Installation (uv)
+## Installation
 
-### 1. Clone the repository
+### Via pip
+
+```bash
+pip install bib-cleaner-tool            # CLI + Python library
+pip install "bib-cleaner-tool[web]"     # + the FastAPI web service
+```
+
+Then:
+
+```bash
+bibcleaner input.bib -o output.bib
+```
+
+### From source (uv)
 
 ```bash
 git clone https://github.com/hzahera/bib-cleaner.git
 cd bib-cleaner
-```
 
-### 2. Install dependencies and create environment
+uv sync                 # CLI + library
+uv sync --extra web     # + web service (FastAPI / uvicorn)
 
-```bash
-uv sync
-```
-
-### 3. Run commands with uv
-
-```bash
 uv run bibcleaner input.bib -o output.bib
-uv run uvicorn bibcleaner.web_api:app --reload
+uv run uvicorn bibcleaner.web_api:app --reload   # needs --extra web
 uv run pytest
 ```
 
-### Optional: pip workflow
+The web stack (FastAPI, uvicorn) is an optional extra, so a plain `pip install
+bib-cleaner` stays lightweight for command-line use.
 
-If you prefer pip/venv, the existing workflow still works:
+### From source (pip / venv)
 
 ```bash
 python3 -m venv venv
 source venv/bin/activate
-pip install -r requirements.txt
-pip install -e .
+pip install -e ".[web]"   # or `pip install -e .` for CLI only
 ```
 
 ---
@@ -128,11 +135,27 @@ If `-o` is omitted the enriched file is saved as `enriched_<input>.bib` in the s
 | `--no-protect-caps` | Disable title capitalization brace-protection |
 | `--dedup` | Merge duplicate entries and print the citation-key remapping |
 | `--keep-cited FILE ...` | Keep only entries cited in the given `.tex`/`.aux` file(s) |
+| `--normalize-keys` | Rewrite citation keys to a consistent `surnameYYYYword` form |
+| `--rewrite-tex FILE ...` | Apply the key remap (from `--dedup`/`--normalize-keys`) to these `.tex` files in place |
 
 ```bash
 # Offline tidy: dedup, prune to what the paper cites, protect capitalization
 uv run bibcleaner refs.bib -o refs_clean.bib --no-enrich --dedup --keep-cited paper.tex paper.aux
+
+# Normalize keys (vaswani2017attention) and update every \cite in the .tex to match
+uv run bibcleaner refs.bib -o refs_clean.bib --normalize-keys --rewrite-tex paper.tex
 ```
+
+### Recommended pre-submission run
+
+The one command to run before you hit submit — enrich preprints, merge
+duplicates, give every entry a clean key, and update your `.tex` to match:
+
+```bash
+bibcleaner refs.bib -o refs.bib --dedup --normalize-keys --rewrite-tex main.tex
+```
+
+> `--rewrite-tex` edits your `.tex` files in place — commit or back up first.
 
 ### Python module
 
@@ -355,7 +378,8 @@ bibcleaner/
 ├── venues.py           Venue name normalization table (~40 venues)
 ├── latex.py            Title capitalization brace-protection
 ├── dedup.py            Duplicate detection + merging
-├── citations.py        .tex/.aux citation parsing + pruning
+├── citations.py        .tex/.aux citation parsing, pruning + rewriting
+├── keys.py             Consistent citation-key generation
 ├── cache.py            Thread-safe TTL cache for provider lookups
 ├── web_api.py          FastAPI service (jobs, rate limiting, CORS)
 └── providers/          One module per data source, uniform Provider interface

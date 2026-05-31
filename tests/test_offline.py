@@ -4,7 +4,8 @@ from bibtexparser.model import Entry, Field
 
 from bibcleaner.latex import protect_title_caps
 from bibcleaner.dedup import deduplicate
-from bibcleaner.citations import collect_cited_keys, prune_unused, missing_citations
+from bibcleaner.citations import collect_cited_keys, prune_unused, missing_citations, rewrite_tex
+from bibcleaner.keys import generate_key, normalize_keys
 
 
 def _entry(entry_type, key, **fields):
@@ -119,3 +120,58 @@ def test_prune_and_missing():
     assert [e.key for e in kept] == ["used"]
     assert dropped == ["unused"]
     assert missing_citations(entries, cited) == ["ghost"]
+
+
+# --------------------------------------------------------------------------
+# citation-key normalization
+# --------------------------------------------------------------------------
+
+def test_generate_key_basic():
+    e = _entry("inproceedings", "old", author="Vaswani, Ashish and others",
+               year="2017", title="Attention Is All You Need")
+    assert generate_key(e) == "vaswani2017attention"
+
+
+def test_generate_key_strips_accents():
+    e = _entry("article", "old", author="Erdős, Paul", year="1959", title="On Random Graphs")
+    assert generate_key(e) == "erdos1959random"  # "On" is a stop word
+
+
+def test_generate_key_none_without_year():
+    e = _entry("article", "old", author="Doe, Jane", title="Something")
+    assert generate_key(e) is None
+
+
+def test_normalize_keys_handles_collisions():
+    a = _entry("article", "a", author="Smith, J", year="2020", title="Deep Learning")
+    b = _entry("article", "b", author="Smith, K", year="2020", title="Deep Learning")
+    remap = normalize_keys([a, b])
+    assert a.key == "smith2020deep"
+    assert b.key == "smith2020deepa"
+    assert remap == {"a": "smith2020deep", "b": "smith2020deepa"}
+
+
+def test_normalize_keys_keeps_ungeneratable():
+    e = _entry("misc", "keepme", title="No author no year")
+    remap = normalize_keys([e])
+    assert e.key == "keepme" and remap == {}
+
+
+# --------------------------------------------------------------------------
+# .tex rewriting
+# --------------------------------------------------------------------------
+
+def test_rewrite_tex_updates_keys(tmp_path):
+    tex = tmp_path / "paper.tex"
+    tex.write_text(r"See \citep{old1, keep} and \cite{old2}.")
+    counts = rewrite_tex([str(tex)], {"old1": "new1", "old2": "new2"})
+    out = tex.read_text()
+    assert counts[str(tex)] == 2
+    assert r"\citep{new1, keep}" in out
+    assert r"\cite{new2}" in out
+
+
+def test_rewrite_tex_noop_without_remap(tmp_path):
+    tex = tmp_path / "paper.tex"
+    tex.write_text(r"\cite{a}")
+    assert rewrite_tex([str(tex)], {}) == {}

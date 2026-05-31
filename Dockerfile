@@ -6,7 +6,7 @@ COPY pyproject.toml README.md ./
 COPY uv.lock ./
 COPY bibcleaner ./bibcleaner
 
-RUN uv sync --frozen --no-dev
+RUN uv sync --frozen --no-dev --extra web
 
 EXPOSE 8000
 

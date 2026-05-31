@@ -39,6 +39,17 @@ def main():
         metavar="FILE",
         help="Keep only entries cited in the given .tex/.aux file(s)",
     )
+    parser.add_argument(
+        "--normalize-keys",
+        action="store_true",
+        help="Rewrite citation keys to a consistent surnameYYYYword form (e.g. vaswani2017attention)",
+    )
+    parser.add_argument(
+        "--rewrite-tex",
+        nargs="+",
+        metavar="FILE",
+        help="Apply the citation-key remap (from --dedup / --normalize-keys) to these .tex files in place",
+    )
 
     args = parser.parse_args()
 
@@ -59,6 +70,8 @@ def main():
             protect_caps=not args.no_protect_caps,
             dedup=args.dedup,
             cited_keys=cited_keys,
+            normalize_keys=args.normalize_keys,
+            rewrite_tex=args.rewrite_tex,
         )
     except KeyboardInterrupt:
         print("\nProcess interrupted by user.")
