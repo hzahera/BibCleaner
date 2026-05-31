@@ -76,43 +76,74 @@ When no published venue is found but the authors have declared one on arXiv (`jo
 
 ## Installation
 
-### Via pip
+### Requirements
+
+- **Python 3.10 or newer** — check with `python3 --version`.
+  On macOS the default `python`/`pip` is often an old 2.7/3.7 that **won't work**;
+  use a 3.10+ interpreter (e.g. Homebrew's `python3.11`/`python3.12`) and always
+  install into a **virtual environment**.
+
+### Install (currently on TestPyPI)
+
+While in beta the package is published on **TestPyPI**. Its dependencies live on
+the real PyPI, so you must add `--extra-index-url` so pip can find them:
 
 ```bash
-pip install bib-cleaner-tool            # CLI + Python library
-pip install "bib-cleaner-tool[web]"     # + the FastAPI web service
+# 1. Create + activate a Python 3.10+ virtual environment
+python3.11 -m venv ~/bibcleaner-env
+source ~/bibcleaner-env/bin/activate          # Windows: bibcleaner-env\Scripts\activate
+
+# 2. Install (TestPyPI for the package, PyPI for its dependencies)
+python -m pip install --upgrade \
+  -i https://test.pypi.org/simple/ \
+  --extra-index-url https://pypi.org/simple/ \
+  bib-cleaner-tool
+
+# 3. Run it
+bib-cleaner-tool input.bib -o output.bib
 ```
 
-Then:
+For the optional web service, install the `[web]` extra instead:
+`... "bib-cleaner-tool[web]"`.
 
-```bash
-bibcleaner input.bib -o output.bib
-```
+The CLI is available as either **`bib-cleaner-tool`** or the short alias
+**`bibcleaner`** — they're identical. If a command isn't found on your `PATH`,
+you can always run it via the module: `python -m bibcleaner.cli ...`.
+
+> Once released on the main PyPI this simplifies to `pip install bib-cleaner-tool`
+> (no `--extra-index-url` needed).
 
 ### From source (uv)
 
 ```bash
-git clone https://github.com/hzahera/bib-cleaner.git
-cd bib-cleaner
+git clone https://github.com/hzahera/BibCleaner.git
+cd BibCleaner
 
 uv sync                 # CLI + library
 uv sync --extra web     # + web service (FastAPI / uvicorn)
 
-uv run bibcleaner input.bib -o output.bib
+uv run bib-cleaner-tool input.bib -o output.bib
 uv run uvicorn bibcleaner.web_api:app --reload   # needs --extra web
 uv run pytest
 ```
 
-The web stack (FastAPI, uvicorn) is an optional extra, so a plain `pip install
-bib-cleaner` stays lightweight for command-line use.
-
 ### From source (pip / venv)
 
 ```bash
-python3 -m venv venv
+python3.11 -m venv venv
 source venv/bin/activate
-pip install -e ".[web]"   # or `pip install -e .` for CLI only
+python -m pip install -e ".[web]"   # or `-e .` for CLI only
 ```
+
+### Troubleshooting (local setup)
+
+| Symptom | Cause & fix |
+|---|---|
+| `No matching distribution found for bibtexparser==2.0.0b9`, or `Ignored … versions that require a different python` | You're on Python < 3.10. Create the venv with `python3.11 -m venv …` and install inside it. |
+| `pip: bad interpreter: … 2.7 …` | Your system `pip` shim points at a deleted Python. Never call bare `pip`; use `python -m pip` inside an activated venv. |
+| `PackageNotFoundError: No package metadata was found for bibcleaner` when running the command | A stale console script from an old install is shadowing the venv. Run `python -m bibcleaner.cli --help` to confirm the package works, then `hash -r`; if needed delete the stale script (e.g. `/Library/Frameworks/Python.framework/Versions/3.7/bin/bibcleaner`). |
+| `No Semantic Scholar API key found. Request failed.` | Old version (< 0.1.5). Upgrade: `python -m pip install --upgrade --force-reinstall --no-cache-dir -i https://test.pypi.org/simple/ --extra-index-url https://pypi.org/simple/ bib-cleaner-tool`. |
+| Check which version is actually running | `python -c "import bibcleaner; print(bibcleaner.__version__)"` |
 
 ---
 
