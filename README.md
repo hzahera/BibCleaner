@@ -44,6 +44,11 @@ BibCleaner automatically cleans and enriches BibTeX bibliographies. It detects a
 | `TACL` | `Transactions of the Association for Computational Linguistics (TACL)` |
 | `CVPR` | `IEEE/CVF Conference on Computer Vision and Pattern Recognition (CVPR)` |
 
+**LaTeX-friendly cleaning** (all offline — no network needed)
+- **Title capitalization protection** — brace-protects acronyms and inter-capped words so sentence-casing styles can't mangle them: `BERT: ... for ImageNet` → `{BERT}: ... for {ImageNet}`. Ordinary Title-Case words are left for the bib style; already-braced text and math (`$...$`) are untouched.
+- **Duplicate merging** (`--dedup`) — collapses entries that share a DOI, arXiv ID, or title+year. Keeps the richest (published beats preprint), folds in any missing fields, and prints the `old → new` citation-key remap.
+- **Used-citation pruning** (`--keep-cited`) — keeps only entries actually `\cite`d in your `.tex`/`.aux`, and warns about cited keys that have no entry (the dreaded `[?]`). Honours `\nocite{*}`.
+
 ---
 
 ## Data Sources
@@ -108,6 +113,21 @@ uv run bibcleaner input.bib -o output.bib
 ```
 
 If `-o` is omitted the enriched file is saved as `enriched_<input>.bib` in the same directory.
+
+**Options**
+
+| Flag | Effect |
+|---|---|
+| `-o`, `--output FILE` | Output path (default `enriched_<input>.bib`) |
+| `--no-enrich` | Skip online lookups; only clean, format, and normalize (fully offline) |
+| `--no-protect-caps` | Disable title capitalization brace-protection |
+| `--dedup` | Merge duplicate entries and print the citation-key remapping |
+| `--keep-cited FILE ...` | Keep only entries cited in the given `.tex`/`.aux` file(s) |
+
+```bash
+# Offline tidy: dedup, prune to what the paper cites, protect capitalization
+uv run bibcleaner refs.bib -o refs_clean.bib --no-enrich --dedup --keep-cited paper.tex paper.aux
+```
 
 ### Python module
 
