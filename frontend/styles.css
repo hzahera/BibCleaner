@@ -186,6 +186,54 @@ button:disabled {
     animation: spin 800ms linear infinite;
 }
 
+.validation-results {
+    border: 1px solid #cbd5e1;
+    border-radius: 14px;
+    background: #f8fafc;
+}
+
+.validation-results__dropdown {
+    padding: 0.5rem 0.75rem;
+}
+
+.validation-results__summary {
+    cursor: pointer;
+    font-weight: 700;
+    color: #1e3a8a;
+}
+
+.validation-results__content {
+    margin-top: 0.75rem;
+    display: grid;
+    gap: 0.75rem;
+}
+
+.validation-entry {
+    border-radius: 10px;
+    padding: 0.65rem 0.75rem;
+    background: #ffffff;
+    border: 1px solid #e2e8f0;
+}
+
+.validation-entry__title {
+    margin: 0;
+    font-size: 0.95rem;
+    color: #0f172a;
+}
+
+.validation-entry__line {
+    margin: 0.25rem 0 0;
+    font-size: 0.9rem;
+}
+
+.validation-entry__line--error {
+    color: #991b1b;
+}
+
+.validation-entry__line--warning {
+    color: #92400e;
+}
+
 @keyframes spin {
     to {
         transform: rotate(360deg);

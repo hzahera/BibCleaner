@@ -1,5 +1,6 @@
 import {
     API_ENDPOINT,
+    VALIDATION_ENDPOINT,
     DEFAULT_DOWNLOAD_FILENAME,
     DEFAULT_INPUT_FILENAME,
     createBibUploadFile,
@@ -13,6 +14,12 @@ import {
 
 type FetchLike = typeof fetch;
 
+interface ValidationResult {
+    entry_id: string;
+    errors: string[];
+    warnings: string[];
+}
+
 interface AppElements {
     root: HTMLElement;
     status: HTMLParagraphElement;
@@ -22,19 +29,26 @@ interface AppElements {
     fileInput: HTMLInputElement;
     cleanButton: HTMLButtonElement;
     processingIndicator: HTMLSpanElement;
+    processingIndicatorText: HTMLSpanElement;
     downloadButton: HTMLButtonElement;
+    validationContainer: HTMLElement;
+    validationDropdown: HTMLDetailsElement;
+    validationSummary: HTMLElement;
+    validationContent: HTMLElement;
 }
 
 export interface BibCleanerAppOptions {
     document?: Document;
     fetchImpl?: FetchLike;
     apiEndpoint?: string;
+    validationEndpoint?: string;
 }
 
 export class BibCleanerApp {
     private readonly document: Document;
     private readonly fetchImpl: FetchLike;
     private readonly apiEndpoint: string;
+    private readonly validationEndpoint: string;
     private elements: AppElements | null = null;
     private currentDownloadFilename = DEFAULT_DOWNLOAD_FILENAME;
 
@@ -42,6 +56,7 @@ export class BibCleanerApp {
         this.document = options.document ?? document;
         this.fetchImpl = options.fetchImpl ?? fetch.bind(globalThis);
         this.apiEndpoint = options.apiEndpoint ?? API_ENDPOINT;
+        this.validationEndpoint = options.validationEndpoint ?? VALIDATION_ENDPOINT;
     }
 
     mount(container: HTMLElement): HTMLElement {
@@ -98,6 +113,12 @@ export class BibCleanerApp {
             readonly
             placeholder="Cleaned BibTeX will appear here..."
           ></textarea>
+                    <section class="validation-results" data-role="validation-results" hidden>
+                        <details class="validation-results__dropdown" data-role="validation-dropdown">
+                            <summary class="validation-results__summary" data-role="validation-summary">Validation results</summary>
+                            <div class="validation-results__content" data-role="validation-content"></div>
+                        </details>
+                    </section>
         </section>
       </main>
     `;
@@ -187,8 +208,9 @@ export class BibCleanerApp {
         const formData = new FormData();
         formData.append("file", bibFile);
 
-        this.setBusy(true);
+        this.setBusy(true, "Processing bibliography...");
         this.clearStatus();
+        this.renderValidationResults([]);
 
         try {
             const response = await this.fetchImpl(this.apiEndpoint, {
@@ -208,7 +230,14 @@ export class BibCleanerApp {
             elements.outputTextArea.value = cleaned;
             this.currentDownloadFilename =
                 responseFilename ?? deriveDownloadFilename(sourceFilename);
-            this.showSuccess("Bibliography cleaned successfully.");
+
+            this.setProcessingMessage("Validating output...");
+            const validationResults = await this.fetchValidationResults(
+                cleaned,
+                this.currentDownloadFilename,
+            );
+            this.renderValidationResults(validationResults);
+            this.showSuccess("Bibliography cleaned and validated successfully.");
         } catch (error) {
             const message = error instanceof Error ? error.message : "Unexpected API error";
             this.showError(message);
@@ -217,12 +246,95 @@ export class BibCleanerApp {
         }
     }
 
-    private setBusy(isBusy: boolean): void {
+    private async fetchValidationResults(
+        text: string,
+        sourceFilename: string,
+    ): Promise<ValidationResult[]> {
+        const validationFile = createBibUploadFile(text, sourceFilename);
+        const formData = new FormData();
+        formData.append("file", validationFile);
+
+        const response = await this.fetchImpl(this.validationEndpoint, {
+            method: "POST",
+            body: formData,
+        });
+
+        if (!response.ok) {
+            throw new Error(await responseErrorMessage(response));
+        }
+
+        const payload = (await response.json()) as unknown;
+        if (!Array.isArray(payload)) {
+            throw new Error("Validation API returned an invalid payload.");
+        }
+
+        return payload as ValidationResult[];
+    }
+
+    private setBusy(isBusy: boolean, message = "Processing..."): void {
         const elements = this.ensureElements();
         elements.uploadButton.disabled = isBusy;
         elements.cleanButton.disabled = isBusy;
         elements.downloadButton.disabled = isBusy;
+        elements.processingIndicatorText.textContent = message;
         elements.processingIndicator.hidden = !isBusy;
+    }
+
+    private setProcessingMessage(message: string): void {
+        const elements = this.ensureElements();
+        elements.processingIndicatorText.textContent = message;
+    }
+
+    private renderValidationResults(results: ValidationResult[]): void {
+        const elements = this.ensureElements();
+        elements.validationContent.replaceChildren();
+
+        if (!results.length) {
+            elements.validationContainer.hidden = true;
+            return;
+        }
+
+        const totalErrors = results.reduce((count, item) => count + item.errors.length, 0);
+        const totalWarnings = results.reduce((count, item) => count + item.warnings.length, 0);
+        elements.validationSummary.textContent =
+            `Validation results (${results.length} entries, ${totalErrors} errors, ${totalWarnings} warnings)`;
+
+        const fragment = this.document.createDocumentFragment();
+        for (const result of results) {
+            fragment.append(this.renderValidationEntry(result));
+        }
+
+        elements.validationContent.replaceChildren(fragment);
+        elements.validationContainer.hidden = false;
+        elements.validationDropdown.open = true;
+    }
+
+    private renderValidationEntry(result: ValidationResult): HTMLElement {
+        const wrapper = this.document.createElement("article");
+        wrapper.className = "validation-entry";
+
+        const title = this.document.createElement("h3");
+        title.className = "validation-entry__title";
+        title.textContent = result.entry_id;
+        wrapper.append(title);
+
+        const errorsLine = this.document.createElement("p");
+        errorsLine.className = "validation-entry__line validation-entry__line--error";
+        errorsLine.textContent =
+            result.errors.length > 0
+                ? `Missing required: ${result.errors.join(", ")}`
+                : "Missing required: none";
+        wrapper.append(errorsLine);
+
+        const warningsLine = this.document.createElement("p");
+        warningsLine.className = "validation-entry__line validation-entry__line--warning";
+        warningsLine.textContent =
+            result.warnings.length > 0
+                ? `Missing optional: ${result.warnings.join(", ")}`
+                : "Missing optional: none";
+        wrapper.append(warningsLine);
+
+        return wrapper;
     }
 
     private showError(message: string): void {
@@ -270,7 +382,12 @@ export class BibCleanerApp {
             fileInput: query<HTMLInputElement>("[data-role='file-input']"),
             cleanButton: query<HTMLButtonElement>("[data-action='clean']"),
             processingIndicator: query<HTMLSpanElement>("[data-role='processing-indicator']"),
+            processingIndicatorText: query<HTMLSpanElement>(".processing-indicator__text"),
             downloadButton: query<HTMLButtonElement>("[data-action='download']"),
+            validationContainer: query<HTMLElement>("[data-role='validation-results']"),
+            validationDropdown: query<HTMLDetailsElement>("[data-role='validation-dropdown']"),
+            validationSummary: query<HTMLElement>("[data-role='validation-summary']"),
+            validationContent: query<HTMLElement>("[data-role='validation-content']"),
         };
     }
 }
