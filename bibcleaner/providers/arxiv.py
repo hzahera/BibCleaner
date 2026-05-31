@@ -39,21 +39,47 @@ def fetch(arxiv_id: str) -> Optional[dict]:
     that a preprint now has a real venue.
     """
     clean = re.sub(r"v\d+$", "", arxiv_id.strip())
-    _throttle()
-    try:
-        resp = requests.get(
-            _ARXIV_API,
-            params={"id_list": clean},
-            headers={
-                "User-Agent": "bibcleaner/0.1 (https://github.com/hzahera/bib-cleaner)"
-            },
-            timeout=10,
-        )
-        if resp.status_code != 200:
+
+    # export.arxiv.org is often slow/flaky — retry on timeouts and 5xx.
+    text = None
+    for attempt in range(3):
+        _throttle()
+        try:
+            resp = requests.get(
+                _ARXIV_API,
+                params={"id_list": clean},
+                headers={
+                    "User-Agent": "bibcleaner/0.1 (https://github.com/hzahera/bib-cleaner)"
+                },
+                timeout=20,
+            )
+            if resp.status_code == 200:
+                text = resp.text
+                break
+            if resp.status_code == 429 or 500 <= resp.status_code < 600:
+                retry_after = resp.headers.get("Retry-After")
+                wait = int(retry_after) if (retry_after or "").isdigit() else 2 * (attempt + 1)
+                logger.debug(
+                    f"arXiv API HTTP {resp.status_code} for {arxiv_id} (attempt {attempt + 1})"
+                )
+                if attempt < 2:
+                    time.sleep(wait)
+                continue
             logger.warning(f"arXiv API HTTP {resp.status_code} for {arxiv_id}")
             return None
+        except requests.exceptions.RequestException as exc:
+            logger.debug(
+                f"arXiv API request error for {arxiv_id} (attempt {attempt + 1}): {exc}"
+            )
+            if attempt < 2:
+                time.sleep(2 * (attempt + 1))  # 2s, 4s
 
-        root = ET.fromstring(resp.text)
+    if text is None:
+        logger.warning(f"arXiv API unavailable for {arxiv_id} after retries")
+        return None
+
+    try:
+        root = ET.fromstring(text)
         entries = root.findall("atom:entry", _NS)
         if not entries:
             return None
@@ -99,7 +125,7 @@ def fetch(arxiv_id: str) -> Optional[dict]:
         }
 
     except Exception as exc:
-        logger.warning(f"arXiv API failed for {arxiv_id}: {exc}")
+        logger.warning(f"arXiv API parse failed for {arxiv_id}: {exc}")
         return None
 
 
