@@ -1,8 +1,8 @@
 <div align="center">
 
 <picture>
-  <source media="(prefers-color-scheme: dark)" srcset="logo-dark.png">
-  <img src="https://github.com/hzahera/BibCleaner/blob/refactor-providers/logo.png" alt="BibCleaner" width="440">
+  <source media="(prefers-color-scheme: dark)" srcset="https://raw.githubusercontent.com/hzahera/bib-cleaner/refactor-providers/logo-dark.png">
+  <img src="https://raw.githubusercontent.com/hzahera/bib-cleaner/refactor-providers/logo.png" alt="BibCleaner" width="440">
 </picture>
 
 ### A tool that you run before every submission.
