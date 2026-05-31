@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "bib-cleaner-tool"
-version = "0.1.3"
+version = "0.1.4"
 authors = [
   { name = "Hamada Zahera" },
   { name = "Italo Lopes" },
@@ -45,6 +45,7 @@ Repository = "https://github.com/hzahera/bib-cleaner"
 Issues = "https://github.com/hzahera/bib-cleaner/issues"
 
 [project.scripts]
+bib-cleaner-tool = "bibcleaner.cli:main"
 bibcleaner = "bibcleaner.cli:main"
 
 [dependency-groups]
