@@ -1,0 +1,28 @@
+# Render Blueprint for the BibCleaner API.
+# Deploy: push to GitHub, then "New +" -> "Blueprint" and point at this repo.
+# Set the secret env vars (CROSSREF_MAILTO, S2_API_KEY) in the dashboard.
+services:
+  - type: web
+    name: bibcleaner-api
+    runtime: docker
+    dockerfilePath: ./Dockerfile
+    plan: free
+    healthCheckPath: /health
+    envVars:
+      # Polite-pool email for CrossRef / OpenAlex (recommended for a shared IP).
+      - key: CROSSREF_MAILTO
+        sync: false
+      # Optional Semantic Scholar key for higher rate limits.
+      - key: S2_API_KEY
+        sync: false
+      # Comma-separated allowed CORS origins; set to your frontend URL in prod.
+      - key: ALLOWED_ORIGINS
+        value: "*"
+      - key: BIBCLEANER_MAX_ENTRIES
+        value: "500"
+      - key: BIBCLEANER_RATE_LIMIT
+        value: "30"
+      - key: BIBCLEANER_WORKERS
+        value: "2"
+      - key: BIBCLEANER_JOB_TTL
+        value: "3600"

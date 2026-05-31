@@ -25,6 +25,7 @@ def process_bibliography_content(
     protect_caps: bool = True,
     dedup: bool = False,
     cited_keys=None,
+    progress=None,
 ) -> str:
     """Parse, clean, and return a BibTeX string.
 
@@ -35,6 +36,7 @@ def process_bibliography_content(
     protect_caps  : brace-protect title capitalization, e.g. {BERT} (default on).
     dedup         : merge duplicate entries; the key remap is printed.
     cited_keys    : if given (a set of keys), keep only entries cited there.
+    progress      : optional callable(done, total) invoked per processed entry.
     """
     if isinstance(content, bytes):
         try:
@@ -52,8 +54,9 @@ def process_bibliography_content(
 
     # ---- 1. Enrich, normalize venues, protect capitalization ----
     enriched = venue_normalized = caps = 0
+    total = len(entries)
     iterator = tqdm(entries, desc="Processing entries") if enrich else entries
-    for entry in iterator:
+    for i, entry in enumerate(iterator):
         try:
             if enrich and enrich_entry(entry):
                 enriched += 1
@@ -63,6 +66,11 @@ def process_bibliography_content(
             print(f"  Warning: could not process {entry.key}: {exc}")
         if protect_caps and _protect_caps(entry):
             caps += 1
+        if progress is not None:
+            try:
+                progress(i + 1, total)
+            except Exception:
+                pass
 
     # Second venue pass so enriched entries also get the canonical form.
     for entry in entries:
