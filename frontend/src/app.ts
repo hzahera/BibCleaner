@@ -1,5 +1,5 @@
 import {
-    API_ENDPOINT,
+    API_BASE,
     DEFAULT_DOWNLOAD_FILENAME,
     DEFAULT_INPUT_FILENAME,
     createBibUploadFile,
@@ -12,6 +12,13 @@ import {
 } from "./helpers";
 
 type FetchLike = typeof fetch;
+
+interface JobStatus {
+    status: string; // queued | processing | done | error
+    done?: number;
+    total?: number;
+    error?: string;
+}
 
 interface AppElements {
     root: HTMLElement;
@@ -28,20 +35,26 @@ interface AppElements {
 export interface BibCleanerAppOptions {
     document?: Document;
     fetchImpl?: FetchLike;
-    apiEndpoint?: string;
+    apiBase?: string;
+    pollIntervalMs?: number;
+    pollTimeoutMs?: number;
 }
 
 export class BibCleanerApp {
     private readonly document: Document;
     private readonly fetchImpl: FetchLike;
-    private readonly apiEndpoint: string;
+    private readonly apiBase: string;
+    private readonly pollIntervalMs: number;
+    private readonly pollTimeoutMs: number;
     private elements: AppElements | null = null;
     private currentDownloadFilename = DEFAULT_DOWNLOAD_FILENAME;
 
     constructor(options: BibCleanerAppOptions = {}) {
         this.document = options.document ?? document;
         this.fetchImpl = options.fetchImpl ?? fetch.bind(globalThis);
-        this.apiEndpoint = options.apiEndpoint ?? API_ENDPOINT;
+        this.apiBase = (options.apiBase ?? API_BASE).replace(/\/+$/u, "");
+        this.pollIntervalMs = options.pollIntervalMs ?? 1000;
+        this.pollTimeoutMs = options.pollTimeoutMs ?? 180000;
     }
 
     mount(container: HTMLElement): HTMLElement {
@@ -191,18 +204,35 @@ export class BibCleanerApp {
         this.clearStatus();
 
         try {
-            const response = await this.fetchImpl(this.apiEndpoint, {
+            // 1. Submit the upload as a background job.
+            const createResponse = await this.fetchImpl(`${this.apiBase}/jobs`, {
                 method: "POST",
                 body: formData,
             });
-
-            if (!response.ok) {
-                throw new Error(await responseErrorMessage(response));
+            if (!createResponse.ok) {
+                throw new Error(await responseErrorMessage(createResponse));
+            }
+            const created = (await createResponse.json()) as { job_id?: string };
+            if (!created.job_id) {
+                throw new Error("Unexpected response from server (no job id).");
             }
 
-            const cleaned = normalizeBibText(await response.text());
+            // 2. Poll until the job finishes.
+            const final = await this.pollJob(created.job_id);
+            if (final.status === "error") {
+                throw new Error(final.error || "Processing failed.");
+            }
+
+            // 3. Download the cleaned result.
+            const resultResponse = await this.fetchImpl(
+                `${this.apiBase}/jobs/${created.job_id}/result`,
+            );
+            if (!resultResponse.ok) {
+                throw new Error(await responseErrorMessage(resultResponse));
+            }
+            const cleaned = normalizeBibText(await resultResponse.text());
             const responseFilename = parseFilenameFromContentDisposition(
-                response.headers.get("content-disposition"),
+                resultResponse.headers.get("content-disposition"),
             );
 
             elements.outputTextArea.value = cleaned;
@@ -215,6 +245,38 @@ export class BibCleanerApp {
         } finally {
             this.setBusy(false);
         }
+    }
+
+    private async pollJob(jobId: string): Promise<JobStatus> {
+        const deadline = Date.now() + this.pollTimeoutMs;
+        for (;;) {
+            const response = await this.fetchImpl(`${this.apiBase}/jobs/${jobId}`);
+            if (!response.ok) {
+                throw new Error(await responseErrorMessage(response));
+            }
+            const status = (await response.json()) as JobStatus;
+            if (status.status === "done" || status.status === "error") {
+                return status;
+            }
+            this.showProgress(status);
+            if (Date.now() >= deadline) {
+                throw new Error("Timed out waiting for the server to finish.");
+            }
+            await this.delay(this.pollIntervalMs);
+        }
+    }
+
+    private delay(ms: number): Promise<void> {
+        return new Promise((resolve) => setTimeout(resolve, ms));
+    }
+
+    private showProgress(status: JobStatus): void {
+        const elements = this.ensureElements();
+        const label = status.total
+            ? `Cleaning… (${status.done ?? 0}/${status.total})`
+            : "Cleaning…";
+        elements.status.dataset.state = "pending";
+        elements.status.textContent = label;
     }
 
     private setBusy(isBusy: boolean): void {

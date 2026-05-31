@@ -1,4 +1,8 @@
-export const API_ENDPOINT = "/api/clean-bib";
+// Base URL for the API. Same-origin "/api" by default (nginx proxies it in
+// docker-compose); set VITE_API_BASE to the API origin when the frontend is
+// hosted separately (e.g. on Render).
+export const API_BASE = (((import.meta as unknown as { env?: Record<string, string> }).env
+    ?.VITE_API_BASE) ?? "/api").replace(/\/+$/u, "");
 export const DEFAULT_INPUT_FILENAME = "bibliography.bib";
 export const DEFAULT_DOWNLOAD_FILENAME = "cleaned.bib";
 export const ACCEPTED_BIB_CONTENT_TYPE = "application/x-bibtex";

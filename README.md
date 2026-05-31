@@ -159,21 +159,45 @@ Start the API locally:
 uv run uvicorn bibcleaner.web_api:app --host 0.0.0.0 --port 8000 --reload
 ```
 
-Health check:
+Because enrichment is rate-limited and can take a while, uploads are processed
+as **background jobs** — submit, poll, then download:
+
+| Method & path | Purpose |
+|---|---|
+| `GET /health` | Liveness + active-job count |
+| `POST /jobs` | Upload a `.bib` (`file=@...`); returns `{ "job_id": ... }`. Optional form fields: `enrich`, `dedup`, `protect_caps` |
+| `GET /jobs/{id}` | Job status: `queued` / `processing` / `done` / `error`, with `done`/`total` progress |
+| `GET /jobs/{id}/result` | The cleaned `.bib` once status is `done` |
+| `POST /clean-bib` | Synchronous convenience endpoint for small uploads (alias `/clear-bib`) |
 
 ```bash
-curl http://localhost:8000/health
+# Submit
+JOB=$(curl -s -X POST http://localhost:8000/jobs -F "file=@references.bib" | jq -r .job_id)
+# Poll
+curl -s http://localhost:8000/jobs/$JOB
+# Download when done
+curl -s http://localhost:8000/jobs/$JOB/result -o cleaned_references.bib
 ```
 
-Clean a bibliography upload:
+**Configuration** (environment variables):
 
-```bash
-curl -X POST http://localhost:8000/clear-bib \
-  -F "file=@references.bib" \
-  -o cleaned_references.bib
-```
+| Variable | Default | Effect |
+|---|---|---|
+| `ALLOWED_ORIGINS` | `*` | Comma-separated CORS origins (set to your frontend URL in prod) |
+| `BIBCLEANER_MAX_ENTRIES` | `500` | Reject uploads with more entries |
+| `BIBCLEANER_MAX_BYTES` | `10485760` | Max upload size |
+| `BIBCLEANER_RATE_LIMIT` | `30` | Requests per minute per IP |
+| `BIBCLEANER_WORKERS` | `2` | Concurrent processing jobs |
+| `BIBCLEANER_JOB_TTL` | `3600` | Seconds a finished job (and its result) is kept |
+| `BIBCLEANER_CACHE_TTL` | `86400` | Lookup-cache lifetime (repeat arXiv IDs/DOIs are served instantly) |
+| `CROSSREF_MAILTO`, `S2_API_KEY` | — | Polite-pool email / API key for upstream sources |
 
-The route `/clean-bib` is also available as an alias.
+### Deploy to Render
+
+A [`render.yaml`](render.yaml) blueprint is included. Push to GitHub, create a
+new **Blueprint** in Render pointing at the repo, then set `CROSSREF_MAILTO`
+(and optionally `S2_API_KEY`) in the dashboard. The Dockerfile honours Render's
+`$PORT`, and `/health` is wired as the health check.
 
 ### Frontend with Docker Compose
 
@@ -329,15 +353,20 @@ bibcleaner/
 ├── cli.py              Command-line interface
 ├── enricher.py         Enrichment pipeline (drives the providers)
 ├── venues.py           Venue name normalization table (~40 venues)
-└── web_api.py          FastAPI service routes (/health, /clean-bib)
+├── latex.py            Title capitalization brace-protection
+├── dedup.py            Duplicate detection + merging
+├── citations.py        .tex/.aux citation parsing + pruning
+├── cache.py            Thread-safe TTL cache for provider lookups
+├── web_api.py          FastAPI service (jobs, rate limiting, CORS)
+└── providers/          One module per data source, uniform Provider interface
+    ├── provider.py         Provider ABC + ProviderQuery / ProviderResult
+    ├── arxiv.py            arXiv Atom API (authors, category, journal_ref, doi)
+    ├── dblp.py             DBLP title search
+    ├── crossref.py         CrossRef DOI + title search
+    ├── semanticscholar.py  Semantic Scholar arXiv-ID lookup
+    └── openalex.py         OpenAlex DOI + title search
 
-providers/              One module per data source, uniform Provider interface
-├── provider.py         Provider ABC + ProviderQuery / ProviderResult
-├── arxiv.py            arXiv Atom API (authors, category, journal_ref, doi)
-├── dblp.py             DBLP title search
-├── crossref.py         CrossRef DOI + title search
-├── semanticscholar.py  Semantic Scholar arXiv-ID lookup
-└── openalex.py         OpenAlex DOI + title search
+frontend/               Vite + TypeScript web UI (submit → poll → download)
 ```
 
 ---

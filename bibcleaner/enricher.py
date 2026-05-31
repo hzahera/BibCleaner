@@ -27,7 +27,7 @@ from typing import Optional
 
 from bibtexparser.model import Entry, Field
 
-from providers import (
+from .providers import (
     ProviderQuery,
     ProviderResult,
     ArxivProvider,
@@ -37,6 +37,7 @@ from providers import (
     OpenAlexClient,
 )
 from .venues import normalize_or_keep, normalize_venue
+from .cache import TTLCache
 
 logger = logging.getLogger(__name__)
 
@@ -50,6 +51,30 @@ _ss = SemanticScholarProvider()
 _openalex = OpenAlexClient(
     mailto=os.environ.get("OPENALEX_MAILTO") or os.environ.get("CROSSREF_MAILTO")
 )
+
+# Shared cache so repeated arXiv IDs / DOIs / titles don't re-hit the APIs.
+_lookup_cache = TTLCache(ttl=float(os.environ.get("BIBCLEANER_CACHE_TTL", 86400)))
+
+
+def _cache_key(provider_name: str, q: ProviderQuery) -> tuple:
+    return (
+        provider_name,
+        q.arxiv_id or "",
+        (q.doi or "").strip().lower(),
+        " ".join((q.title or "").lower().split()),
+        str(q.year or ""),
+    )
+
+
+def _lookup(provider, q: ProviderQuery) -> ProviderResult:
+    """provider.lookup(q), memoized (including negative results)."""
+    key = _cache_key(provider.name, q)
+    cached = _lookup_cache.get(key)
+    if cached is not None:
+        return cached
+    result = provider.lookup(q)
+    _lookup_cache.set(key, result)
+    return result
 
 # Canonical venues that are conference proceedings but whose names lack the
 # usual hint words ("conference", "proceedings", ...).
@@ -242,7 +267,7 @@ def _resolve_by_doi(doi: str) -> Optional[dict]:
     """Resolve a DOI to structured venue data via CrossRef, then OpenAlex."""
     doi_query = ProviderQuery(doi=doi)  # empty title => providers skip title search
     for provider in (_crossref, _openalex):
-        result = provider.lookup(doi_query)
+        result = _lookup(provider, doi_query)
         if result.published_data:
             return result.published_data
     return None
@@ -271,8 +296,9 @@ def enrich_entry(entry: Entry) -> bool:
     logger.debug(f"Processing {entry.key} (arXiv:{arxiv_id})")
 
     # ---- Step 1: arXiv API — canonical authors, category, declared venue ----
-    arxiv_res = _arxiv.lookup(
-        ProviderQuery(title=title, authors=authors, year=year, arxiv_id=arxiv_id)
+    arxiv_res = _lookup(
+        _arxiv,
+        ProviderQuery(title=title, authors=authors, year=year, arxiv_id=arxiv_id),
     )
     canonical_authors = arxiv_res.canonical_authors
     primaryclass = arxiv_res.primaryclass
@@ -290,22 +316,22 @@ def enrich_entry(entry: Entry) -> bool:
     # ---- Step 3: DBLP title search ----
     dblp_res = ProviderResult()
     if data is None:
-        dblp_res = _dblp.lookup(tquery)
+        dblp_res = _lookup(_dblp, tquery)
         data = dblp_res.published_data
 
     # ---- Step 4: CrossRef title search ----
     cr_res = ProviderResult()
     if data is None:
-        cr_res = _crossref.lookup(tquery)
+        cr_res = _lookup(_crossref, tquery)
         data = cr_res.published_data
 
     # ---- Steps 5 & 6: SS + OpenAlex, only if DBLP/CrossRef didn't recognise it ----
     ss_res = ProviderResult()
     if data is None and not (dblp_res.matched or cr_res.matched):
-        ss_res = _ss.lookup(tquery)
+        ss_res = _lookup(_ss, tquery)
         data = ss_res.published_data
         if data is None:
-            data = _openalex.lookup(tquery).published_data
+            data = _lookup(_openalex, tquery).published_data
 
     # ---- Step 7: arXiv journal_ref fallback (known venues only) ----
     if data is None and arxiv_res.journal_ref:

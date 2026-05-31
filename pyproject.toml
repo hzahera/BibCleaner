@@ -8,14 +8,20 @@ version = "0.1.0"
 authors = [
   { name="Hamada Zahera" }
 ]
-description = "Python toolkit for automated BibTeX metadata enrichment using Semantic Scholar API"
+description = "Automated BibTeX cleaning: replace arXiv preprints with published venues, normalize venue names, and tidy entries for LaTeX."
 readme = "README.md"
 requires-python = ">=3.10"
+license = { text = "MIT" }
+keywords = ["bibtex", "bibliography", "latex", "arxiv", "references", "citations", "dblp", "crossref"]
 classifiers = [
     "Programming Language :: Python :: 3",
     "License :: OSI Approved :: MIT License",
     "Operating System :: OS Independent",
+    "Topic :: Text Processing :: Markup :: LaTeX",
+    "Topic :: Scientific/Engineering",
+    "Intended Audience :: Science/Research",
 ]
+
 dependencies = [
     "requests>=2.25.0",
     "bibtexparser==2.0.0b9",
@@ -24,6 +30,11 @@ dependencies = [
     "uvicorn[standard]>=0.35.0",
     "python-multipart>=0.0.20"
 ]
+
+[project.urls]
+Homepage = "https://github.com/hzahera/bib-cleaner"
+Repository = "https://github.com/hzahera/bib-cleaner"
+Issues = "https://github.com/hzahera/bib-cleaner/issues"
 
 [project.scripts]
 bibcleaner = "bibcleaner.cli:main"
@@ -35,5 +46,5 @@ dev = [
     "ruff>=0.15.14",
 ]
 
-[tool.setuptools]
-packages = ["bibcleaner", "providers"]
+[tool.setuptools.packages.find]
+include = ["bibcleaner*"]
