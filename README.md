@@ -1,10 +1,15 @@
 <div align="center">
 
-<img src="logo.png" alt="BibCleaner logo" width="360">
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="logo-dark.png">
+  <img src="logo.png" alt="BibCleaner" width="440">
+</picture>
+
+### A tool that you run before every submission.
 
 **A Python toolkit for automated BibTeX metadata enrichment and venue normalization**
 
-_Developed for researchers, by researchers._
+_Developed by researchers, to researchers._
 
 [![Python 3.10+](https://img.shields.io/badge/Python-3.10+-blue.svg)](https://www.python.org/downloads/)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
