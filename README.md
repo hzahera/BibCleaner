@@ -274,21 +274,24 @@ docker compose up --build
 
 ## Example
 
+These are **real outputs** from the tool (Self-Refine → NeurIPS via DOI; BERT → NAACL via Semantic Scholar):
+
 **Input**
 
 ```bibtex
-@article{madaan2023selfrefine,
+@article{selfrefine,
   title   = {Self-Refine: Iterative Refinement with Self-Feedback},
   author  = {Madaan, Aman and Tandon, Niket and others},
   journal = {arXiv preprint arXiv:2303.17651},
   year    = {2023}
 }
 
-@article{llmbar2024,
-  title   = {RouterBench: A Benchmark for Multi-LLM Routing Systems},
-  author  = {Hu, Qitian Jason and Bieker, Jacob and Li, Xiuyu},
-  journal = {arXiv preprint arXiv:2403.12031},
-  year    = {2024}
+@misc{bert,
+  title         = {BERT: Pre-training of Deep Bidirectional Transformers for Language Understanding},
+  author        = {Devlin, Jacob and Chang, Ming-Wei and Lee, Kenton and Toutanova, Kristina},
+  eprint        = {1810.04805},
+  archiveprefix = {arXiv},
+  year          = {2018}
 }
 
 @inproceedings{existing,
@@ -302,21 +305,21 @@ docker compose up --build
 **Output**
 
 ```bibtex
-@inproceedings{madaan2023selfrefine,
-  title     = {Self-Refine: Iterative Refinement with Self-Feedback},
-  author    = {Aman Madaan and Niket Tandon and Prakhar Gupta and ...},
+@inproceedings{selfrefine,
+  title     = {{Self-Refine}: Iterative Refinement with {Self-Feedback}},
+  author    = {Aman Madaan and Niket Tandon and Prakhar Gupta and ... and Peter Clark},  % full 16-author list
+  year      = {2023},
   booktitle = {Advances in Neural Information Processing Systems (NeurIPS)},
-  year      = {2023}
+  doi       = {10.52202/075280-2019},
+  pages     = {46534--46594}
 }
 
-@misc{llmbar2024,
-  title         = {RouterBench: A Benchmark for Multi-LLM Routing Systems},
-  author        = {Qitian Jason Hu and Jacob Bieker and Xiuyu Li and Nan Jiang and ...},
-  year          = {2024},
-  eprint        = {2403.12031},
-  archiveprefix = {arXiv},
-  primaryclass  = {cs.LG},
-  url           = {https://arxiv.org/abs/2403.12031}
+@inproceedings{bert,
+  title     = {{BERT}: Pre-training of Deep Bidirectional Transformers for Language Understanding},
+  author    = {Devlin, Jacob and Chang, Ming-Wei and Lee, Kenton and Toutanova, Kristina},
+  year      = {2019},
+  booktitle = {Annual Conference of the North American Chapter of the Association for Computational Linguistics (NAACL)},
+  doi       = {10.18653/v1/N19-1423}
 }
 
 @inproceedings{existing,
@@ -326,6 +329,8 @@ docker compose up --build
   year      = {2017}
 }
 ```
+
+The first two arXiv preprints were replaced with their published venue (full authors, DOI, pages); the third was already published, so only its `booktitle` was normalized to the canonical form. Preprints with **no** confirmed published version are left as clean `@misc` entries rather than guessed.
 
 The third entry was never an arXiv preprint — BibCleaner normalized its `booktitle` from `NeurIPS` to the canonical full name automatically.
 
