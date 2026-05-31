@@ -5,6 +5,7 @@ from fastapi.responses import JSONResponse, Response
 
 from . import __version__
 from .bibcleaner import process_bibliography_content
+from .validation import validate_bibliography_content
 
 APP_NAME = "BibCleaner API"
 MAX_UPLOAD_BYTES = 10 * 1024 * 1024  # 10 MB safeguard
@@ -16,14 +17,7 @@ _ALLOWED_CONTENT_TYPES = {
 app = FastAPI(title=APP_NAME, version=__version__)
 
 
-@app.get("/health")
-def health() -> dict:
-    return {"status": "healthy", "service": APP_NAME, "version": __version__}
-
-
-@app.post("/clear-bib")
-@app.post("/clean-bib")
-async def clear_bib(file: UploadFile | None = File(default=None)) -> Response:
+async def _read_uploaded_bib(file: UploadFile | None) -> tuple[str, bytes]:
     if file is None:
         raise HTTPException(status_code=400, detail="Missing file upload field 'file'")
 
@@ -47,6 +41,19 @@ async def clear_bib(file: UploadFile | None = File(default=None)) -> Response:
     if len(raw) > MAX_UPLOAD_BYTES:
         raise HTTPException(status_code=413, detail="Uploaded file is too large")
 
+    return filename, raw
+
+
+@app.get("/health")
+def health() -> dict:
+    return {"status": "healthy", "service": APP_NAME, "version": __version__}
+
+
+@app.post("/clear-bib")
+@app.post("/clean-bib")
+async def clear_bib(file: UploadFile | None = File(default=None)) -> Response:
+    filename, raw = await _read_uploaded_bib(file)
+
     try:
         cleaned = process_bibliography_content(raw)
     except ValueError as exc:
@@ -62,6 +69,23 @@ async def clear_bib(file: UploadFile | None = File(default=None)) -> Response:
     return Response(
         content=cleaned, media_type="text/x-bibtex; charset=utf-8", headers=headers
     )
+
+
+@app.post("/validation")
+async def validation(file: UploadFile | None = File(default=None)) -> JSONResponse:
+    _, raw = await _read_uploaded_bib(file)
+
+    try:
+        results = validate_bibliography_content(raw)
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+    except Exception as exc:
+        raise HTTPException(
+            status_code=500,
+            detail=f"Failed to validate bibliography: {exc}",
+        ) from exc
+
+    return JSONResponse(content=results)
 
 
 @app.exception_handler(HTTPException)

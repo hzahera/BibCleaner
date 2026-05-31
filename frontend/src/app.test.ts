@@ -22,6 +22,20 @@ function createResponse(
     } as unknown as Response;
 }
 
+function createJsonResponse(
+    payload: unknown,
+    init: { ok?: boolean; status?: number; headers?: Record<string, string> } = {},
+) {
+    const headers = new Headers(init.headers ?? {});
+    return {
+        ok: init.ok ?? true,
+        status: init.status ?? 200,
+        headers,
+        text: vi.fn().mockRejectedValue(new Error("not text")),
+        json: vi.fn().mockResolvedValue(payload),
+    } as unknown as Response;
+}
+
 describe("BibCleaner frontend helpers", () => {
     it("derives download filenames from content disposition headers", () => {
         expect(
@@ -89,22 +103,28 @@ describe("BibCleaner frontend app", () => {
     });
 
     it("uploads a file, submits it to the API, and populates the output", async () => {
-        const fetchMock = vi.fn().mockResolvedValue(
-            createResponse("@article{demo,title={Cleaned}}\n", {
-                headers: { "content-disposition": 'attachment; filename="cleaned_refs.bib"' },
-            }),
-        );
+        const fetchMock = vi
+            .fn()
+            .mockResolvedValueOnce(
+                createResponse("@article{demo,title={Cleaned}}\n", {
+                    headers: { "content-disposition": 'attachment; filename="cleaned_refs.bib"' },
+                }),
+            )
+            .mockResolvedValueOnce(createJsonResponse([]));
         const app = new BibCleanerApp({ document, fetchImpl: fetchMock, apiEndpoint: "/api/clean-bib" });
 
         app.mount(document.getElementById("app") as HTMLElement);
         await app.loadFile(new File(["@article{demo,title={Raw}}"], "refs.txt", { type: "text/plain" }));
 
-        expect(fetchMock).toHaveBeenCalledTimes(1);
-        const [url, init] = fetchMock.mock.calls[0];
-        expect(url).toBe("/api/clean-bib");
-        expect(init?.method).toBe("POST");
+        expect(fetchMock).toHaveBeenCalledTimes(2);
+        const [cleanUrl, cleanInit] = fetchMock.mock.calls[0];
+        expect(cleanUrl).toBe("/api/clean-bib");
+        expect(cleanInit?.method).toBe("POST");
 
-        const formData = init?.body as FormData;
+        const [validationUrl] = fetchMock.mock.calls[1];
+        expect(validationUrl).toBe("/api/validation");
+
+        const formData = cleanInit?.body as FormData;
         const uploaded = formData.get("file") as File;
         expect(uploaded.name).toBe("refs.bib");
         expect(uploaded.type).toBe("application/x-bibtex");
@@ -117,7 +137,10 @@ describe("BibCleaner frontend app", () => {
     });
 
     it("submits typed content through the explicit clean action", async () => {
-        const fetchMock = vi.fn().mockResolvedValue(createResponse("@article{demo,title={Typed}}\n"));
+        const fetchMock = vi
+            .fn()
+            .mockResolvedValueOnce(createResponse("@article{demo,title={Typed}}\n"))
+            .mockResolvedValueOnce(createJsonResponse([]));
         const app = new BibCleanerApp({ document, fetchImpl: fetchMock, apiEndpoint: "/api/clean-bib" });
 
         app.mount(document.getElementById("app") as HTMLElement);
@@ -127,7 +150,7 @@ describe("BibCleaner frontend app", () => {
 
         await app.submitCurrentContent();
 
-        expect(fetchMock).toHaveBeenCalledTimes(1);
+        expect(fetchMock).toHaveBeenCalledTimes(2);
         const formData = fetchMock.mock.calls[0][1]?.body as FormData;
         const uploaded = formData.get("file") as File;
         expect(uploaded.name).toBe("bibliography.bib");
@@ -135,14 +158,17 @@ describe("BibCleaner frontend app", () => {
             .toContain("Typed");
     });
 
-    it("shows a loading indicator only while submit is in progress", async () => {
-        let resolveResponse: ((response: Response) => void) | null = null;
-        const fetchMock = vi.fn().mockImplementation(
-            () =>
-                new Promise<Response>((resolve) => {
-                    resolveResponse = resolve;
-                }),
-        );
+    it("updates spinner text while moving from processing to validation", async () => {
+        let resolveValidation: ((response: Response) => void) | null = null;
+        const fetchMock = vi
+            .fn()
+            .mockResolvedValueOnce(createResponse("@article{demo,title={Typed}}\n"))
+            .mockImplementationOnce(
+                () =>
+                    new Promise<Response>((resolve) => {
+                        resolveValidation = resolve;
+                    }),
+            );
         const app = new BibCleanerApp({ document, fetchImpl: fetchMock, apiEndpoint: "/api/clean-bib" });
 
         app.mount(document.getElementById("app") as HTMLElement);
@@ -157,21 +183,67 @@ describe("BibCleaner frontend app", () => {
 
         expect(cleanButton.disabled).toBe(true);
         expect(indicator.hidden).toBe(false);
-        expect(indicator.textContent).toContain("Processing...");
+        expect(indicator.textContent).toContain("Processing bibliography...");
 
-        resolveResponse?.(createResponse("@article{demo,title={Typed}}\n") as unknown as Response);
+        await Promise.resolve();
+        expect(indicator.textContent).toContain("Validating output...");
+
+        resolveValidation?.(createJsonResponse([]));
         await pendingSubmit;
 
         expect(cleanButton.disabled).toBe(false);
         expect(indicator.hidden).toBe(true);
     });
 
-    it("downloads the current output using the latest filename", async () => {
-        const fetchMock = vi.fn().mockResolvedValue(
-            createResponse("@article{demo,title={Cleaned}}\n", {
-                headers: { "content-disposition": 'attachment; filename="cleaned_refs.bib"' },
-            }),
+    it("renders validation dropdown content when validation returns results", async () => {
+        const fetchMock = vi
+            .fn()
+            .mockResolvedValueOnce(createResponse("@article{demo,title={Cleaned}}\n"))
+            .mockResolvedValueOnce(
+                createJsonResponse([
+                    {
+                        entry_id: "demo",
+                        errors: ["author"],
+                        warnings: ["doi", "url"],
+                    },
+                ]),
+            );
+        const app = new BibCleanerApp({ document, fetchImpl: fetchMock, apiEndpoint: "/api/clean-bib" });
+
+        app.mount(document.getElementById("app") as HTMLElement);
+
+        const input = document.querySelector("[data-role='input-textarea']") as HTMLTextAreaElement;
+        input.value = "@article{demo,title={Example}}";
+
+        await app.submitCurrentContent();
+
+        const validationContainer = document.querySelector(
+            "[data-role='validation-results']",
+        ) as HTMLElement;
+        expect(validationContainer.hidden).toBe(false);
+        expect(document.querySelector("[data-role='validation-summary']")?.textContent).toContain(
+            "Validation results",
         );
+        expect(document.querySelector("[data-role='validation-content']")?.textContent).toContain(
+            "demo",
+        );
+        expect(document.querySelector("[data-role='validation-content']")?.textContent).toContain(
+            "Missing required: author",
+        );
+        expect(document.querySelector("[data-role='validation-content']")?.textContent).toContain(
+            "Missing optional: doi, url",
+        );
+    });
+
+    it("downloads the current output using the latest filename", async () => {
+        const fetchMock = vi
+            .fn()
+            .mockResolvedValueOnce(
+                createResponse("@article{demo,title={Cleaned}}\n", {
+                    headers: { "content-disposition": 'attachment; filename="cleaned_refs.bib"' },
+                }),
+            )
+            .mockResolvedValueOnce(createJsonResponse([]));
         const clickMock = vi.fn();
         const createObjectUrlMock = vi.spyOn(URL, "createObjectURL").mockReturnValue("blob:123");
         const revokeObjectUrlMock = vi.spyOn(URL, "revokeObjectURL").mockImplementation(() => undefined);

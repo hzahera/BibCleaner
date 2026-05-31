@@ -1,4 +1,5 @@
 export const API_ENDPOINT = "/api/clean-bib";
+export const VALIDATION_ENDPOINT = "/api/validation";
 export const DEFAULT_INPUT_FILENAME = "bibliography.bib";
 export const DEFAULT_DOWNLOAD_FILENAME = "cleaned.bib";
 export const ACCEPTED_BIB_CONTENT_TYPE = "application/x-bibtex";
