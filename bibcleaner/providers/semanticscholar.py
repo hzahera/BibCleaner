@@ -39,11 +39,9 @@ def fetch_by_arxiv_id(arxiv_id: str, retries: int = 3) -> Optional[dict]:
     url = f"https://api.semanticscholar.org/graph/v1/paper/ARXIV:{clean_id}"
     params = {"fields": _SS_FIELDS}
 
+    # The API works anonymously (rate-limited); a key only raises the limit.
     api_key = os.environ.get("S2_API_KEY")
-    if not api_key:
-        logger.warning("No Semantic Scholar API key found. Request failed.")
-        return None
-    headers = {"x-api-key": api_key}
+    headers = {"x-api-key": api_key} if api_key else {}
 
     for attempt in range(retries):
         _throttle()
