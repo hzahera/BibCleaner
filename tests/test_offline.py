@@ -6,6 +6,7 @@ from bibcleaner.latex import protect_title_caps
 from bibcleaner.dedup import deduplicate
 from bibcleaner.citations import collect_cited_keys, prune_unused, missing_citations, rewrite_tex
 from bibcleaner.keys import generate_key, normalize_keys
+from bibcleaner.venues import normalize_venue
 
 
 def _entry(entry_type, key, **fields):
@@ -175,3 +176,27 @@ def test_rewrite_tex_noop_without_remap(tmp_path):
     tex = tmp_path / "paper.tex"
     tex.write_text(r"\cite{a}")
     assert rewrite_tex([str(tex)], {}) == {}
+
+
+# --------------------------------------------------------------------------
+# venue normalization — trailing volume/year numbers
+# --------------------------------------------------------------------------
+
+def test_venue_strips_trailing_volume():
+    assert normalize_venue("Advances in Neural Information Processing Systems 36") == \
+        "Advances in Neural Information Processing Systems (NeurIPS)"
+
+
+def test_venue_strips_trailing_year():
+    assert normalize_venue("ICLR 2024") == \
+        "International Conference on Learning Representations (ICLR)"
+
+
+def test_venue_strips_volume_keyword():
+    assert normalize_venue("Transactions of the Association for Computational Linguistics, Volume 12") == \
+        "Transactions of the Association for Computational Linguistics (TACL)"
+
+
+def test_venue_plain_still_matches():
+    assert normalize_venue("NeurIPS") == "Advances in Neural Information Processing Systems (NeurIPS)"
+    assert normalize_venue("Totally Unknown Venue 2024") is None

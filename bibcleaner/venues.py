@@ -403,7 +403,11 @@ def _key(text: str) -> str:
     # Remove punctuation except spaces
     t = re.sub(r"[^\w\s]", " ", t)
     # Collapse whitespace
-    return " ".join(t.split())
+    t = " ".join(t.split())
+    # Strip a trailing volume / edition / year number so e.g. "... Systems 36",
+    # "ICLR 2024", "Nature Communications 14", "... Volume 12" still match.
+    t = re.sub(r"\s+(?:volume|vol|no|number|part|edition)?\s*\d+$", "", t).strip()
+    return t
 
 
 _LOOKUP: dict[str, str] = {}
