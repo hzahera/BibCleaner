@@ -35,6 +35,19 @@ _HEADERS = {
     "Connection": "close",  # avoid keep-alive issues with DBLP
 }
 
+# DBLP is unauthenticated and throttles bursts with HTTP 429. Keep a small gap
+# between calls to stay polite, and back off when asked.
+_MIN_GAP = 1.0
+_last_call: float = 0.0
+
+
+def _throttle():
+    global _last_call
+    elapsed = time.time() - _last_call
+    if elapsed < _MIN_GAP:
+        time.sleep(_MIN_GAP - elapsed)
+    _last_call = time.time()
+
 
 def _normalize_text(text: str) -> str:
     return " ".join((text or "").lower().split())
@@ -80,8 +93,9 @@ def _title_keywords(title: str, max_words: int = 6) -> str:
 
 
 def _fetch(query: str, max_results: int) -> list:
-    """Single DBLP HTTP call; returns list of info dicts or []."""
-    for attempt in range(3):
+    """Single DBLP query (with throttle + 429 back-off); returns info dicts or []."""
+    for attempt in range(4):
+        _throttle()
         try:
             resp = requests.get(
                 DBLP_SEARCH,
@@ -89,6 +103,13 @@ def _fetch(query: str, max_results: int) -> list:
                 headers=_HEADERS,
                 timeout=10,
             )
+            if resp.status_code == 429:
+                # Respect Retry-After when present, else exponential back-off.
+                retry_after = resp.headers.get("Retry-After")
+                wait = int(retry_after) if (retry_after or "").isdigit() else 2 ** attempt
+                logger.warning(f"DBLP rate-limited; retrying in {wait}s")
+                time.sleep(wait)
+                continue
             if resp.status_code != 200:
                 logger.warning(f"DBLP HTTP {resp.status_code}")
                 return []

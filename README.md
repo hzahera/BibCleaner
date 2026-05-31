@@ -331,29 +331,34 @@ The third entry was never an arXiv preprint — BibCleaner normalized its `bookt
 
 ---
 
-## Optional API keys
+## API keys & rate limits
 
-All data sources work without a key. Keys unlock higher rate limits for large bibliographies.
+BibCleaner works with **no keys at all**, but the public APIs throttle anonymous
+traffic. For anything beyond a handful of entries we **strongly recommend
+getting a free Semantic Scholar key** — it's the difference between full
+coverage and Semantic Scholar being skipped under load.
 
-| Variable | Service | Where to apply |
-|---|---|---|
-| `S2_API_KEY` | Semantic Scholar | <https://www.semanticscholar.org/product/api#api-key-form> |
-| `CROSSREF_MAILTO` | CrossRef polite pool | Any valid email address |
-
-> **Seeing `Semantic Scholar rate-limited`?** Without a key, the shared anonymous
-> pool is heavily throttled — BibCleaner now just **skips** Semantic Scholar when
-> it's rate-limited (it's only a fallback source, so enrichment continues via
-> arXiv/DBLP/CrossRef/OpenAlex). Set `S2_API_KEY` to use it reliably.
+| Variable | Service | Recommended? | Get it |
+|---|---|---|---|
+| `S2_API_KEY` | Semantic Scholar | ✅ Yes — free, removes the rate limit | <https://www.semanticscholar.org/product/api> |
+| `CROSSREF_MAILTO` | CrossRef polite pool | Optional — your email enables the faster pool | any valid email |
 
 ```bash
-# macOS / Linux
+# macOS / Linux  (add to ~/.zshrc to make it permanent)
 export S2_API_KEY=your_key_here
 export CROSSREF_MAILTO=you@example.com
 
-# Windows Command Prompt
+# Windows (Command Prompt)
 set S2_API_KEY=your_key_here
 set CROSSREF_MAILTO=you@example.com
 ```
+
+> Keep keys in environment variables only — **never commit them** to the repo.
+
+**How BibCleaner behaves under rate limits** (so a busy run never stalls or fails):
+- **Semantic Scholar** — without a key, it's *skipped immediately* when throttled (it's only a fallback; enrichment continues via arXiv/DBLP/CrossRef/OpenAlex). With `S2_API_KEY`, it retries with back-off.
+- **DBLP** — automatically paced and retried with back-off on `HTTP 429` (honoring `Retry-After`), so transient throttling is handled for you.
+- Repeated lookups (same arXiv ID / DOI / title) are cached for the run, so re-runs and duplicate entries don't re-hit the APIs.
 
 ---
 
