@@ -105,9 +105,10 @@ def _fetch(query: str, max_results: int) -> list:
             )
             if resp.status_code == 429:
                 # Respect Retry-After when present, else exponential back-off.
+                # Logged at debug: it's a handled, recoverable event, not an error.
                 retry_after = resp.headers.get("Retry-After")
                 wait = int(retry_after) if (retry_after or "").isdigit() else 2 ** attempt
-                logger.warning(f"DBLP rate-limited; retrying in {wait}s")
+                logger.debug(f"DBLP rate-limited; retrying in {wait}s")
                 time.sleep(wait)
                 continue
             if resp.status_code != 200:
