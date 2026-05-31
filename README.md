@@ -31,6 +31,7 @@ BibCleaner automatically cleans and enriches BibTeX bibliographies. It detects a
 - Detects arXiv entries from `eprint`, `archiveprefix`, or a `journal = {arXiv preprint arXiv:XXXX}` field
 - Replaces them with the correct `@inproceedings` or `@article` entry including `booktitle`/`journal`, `year`, `pages`, `volume`, and `doi`
 - Entries confirmed as still-unpublished are converted to clean `@misc` preprints with `eprint`, `archiveprefix`, `primaryclass`, and `url` fields
+- **Confidence-gated**: every match carries a confidence score based on how it was found (exact DOI/arXiv-ID = high, fuzzy title search = lower). Low-confidence candidates are **flagged with a `note` for you to verify, not applied** — so a wrong venue is never written silently. Tune the bar with `BIBCLEANER_MIN_CONFIDENCE` (default `0.8`).
 
 **Full author list expansion**
 - Expands truncated lists (`et al.`, `others`) and silently incomplete lists using canonical author data
@@ -438,6 +439,26 @@ bibcleaner/
 
 frontend/               Vite + TypeScript web UI (submit → poll → download)
 ```
+
+---
+
+## Evaluation
+
+Matching quality is measured against a labeled set of well-known arXiv papers
+with verified published venues ([`eval/dataset.json`](eval/dataset.json)).
+
+```bash
+python eval/evaluate.py                 # live run (set S2_API_KEY for best coverage)
+python eval/evaluate.py --offline        # replay the recorded results, no network
+python eval/evaluate.py --limit 6        # quick subset
+```
+
+It reports **precision** (of the venues it asserted, how many were right),
+**recall** (of published papers, how many it resolved correctly), and accuracy,
+plus a per-paper breakdown with the confidence and source for each match. A live
+run records `eval/results_cache.json` so the metrics can be replayed
+deterministically (handy for CI and regression checks). The seed set is small
+and easy to extend — add entries to `dataset.json` to strengthen the benchmark.
 
 ---
 

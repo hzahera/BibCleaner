@@ -5,3 +5,5 @@ dist/
 build/
 *.egg-info/
 *.bib
+# evaluation fixture (recorded per-user)
+eval/results_cache.json

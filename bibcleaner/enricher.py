@@ -273,6 +273,109 @@ def _resolve_by_doi(doi: str) -> Optional[dict]:
     return None
 
 
+# Method-based confidence: *how* the venue was matched is the main reliability
+# signal — an exact arXiv-ID / DOI match is trustworthy; a fuzzy title search
+# (especially OpenAlex, the last resort) is less so.
+_SOURCE_CONFIDENCE = {
+    "doi": 1.0,             # exact DOI resolution
+    "journal_ref": 0.97,    # author-declared venue on arXiv
+    "semanticscholar": 0.95,  # exact arXiv-ID lookup
+    "dblp": 0.85,           # title search (authoritative for CS)
+    "crossref": 0.80,       # title search
+    "openalex": 0.75,       # last-resort title search
+}
+# Matches below this are flagged for review rather than applied.
+_MIN_CONFIDENCE = float(os.environ.get("BIBCLEANER_MIN_CONFIDENCE", "0.8"))
+
+
+def resolve_entry(fields: dict) -> dict:
+    """Resolve an entry's published venue, with a confidence score.
+
+    Returns a dict with keys: arxiv_id, data (venue dict | None), confidence
+    (0..1), source (which API matched it), canonical_authors, primaryclass,
+    preprint_authors.  Used by both enrich_entry and the evaluation harness.
+    """
+    out = {
+        "arxiv_id": extract_arxiv_id(fields),
+        "data": None,
+        "confidence": 0.0,
+        "source": None,
+        "canonical_authors": [],
+        "primaryclass": None,
+        "preprint_authors": [],
+    }
+    arxiv_id = out["arxiv_id"]
+    if not arxiv_id:
+        return out
+
+    title = fields.get("title", "")
+    raw_author = fields.get("author", "")
+    authors = [a.strip() for a in re.split(r"\band\b", raw_author, flags=re.IGNORECASE) if a.strip()]
+    year = fields.get("year")
+
+    # Step 1: arXiv API — canonical authors, category, declared venue.
+    arxiv_res = _lookup(
+        _arxiv, ProviderQuery(title=title, authors=authors, year=year, arxiv_id=arxiv_id)
+    )
+    out["canonical_authors"] = arxiv_res.canonical_authors
+    out["primaryclass"] = arxiv_res.primaryclass
+    doi = fields.get("doi") or arxiv_res.doi
+
+    tquery = ProviderQuery(title=title, authors=authors, year=year, arxiv_id=arxiv_id)
+    data: Optional[dict] = None
+    source: Optional[str] = None
+
+    # Step 2: DOI-first exact resolution.
+    if doi:
+        data = _resolve_by_doi(doi)
+        if data:
+            source = "doi"
+
+    # Step 3: DBLP title search.
+    dblp_res = ProviderResult()
+    if data is None:
+        dblp_res = _lookup(_dblp, tquery)
+        if dblp_res.published_data:
+            data, source = dblp_res.published_data, "dblp"
+
+    # Step 4: CrossRef title search.
+    cr_res = ProviderResult()
+    if data is None:
+        cr_res = _lookup(_crossref, tquery)
+        if cr_res.published_data:
+            data, source = cr_res.published_data, "crossref"
+
+    # Steps 5 & 6: SS + OpenAlex, only if DBLP/CrossRef didn't recognise it.
+    ss_res = ProviderResult()
+    if data is None and not (dblp_res.matched or cr_res.matched):
+        ss_res = _lookup(_ss, tquery)
+        if ss_res.published_data:
+            data, source = ss_res.published_data, "semanticscholar"
+        else:
+            oa_res = _lookup(_openalex, tquery)
+            if oa_res.published_data:
+                data, source = oa_res.published_data, "openalex"
+
+    # Step 7: arXiv journal_ref fallback (known venues only).
+    if data is None and arxiv_res.journal_ref:
+        jr = _data_from_journal_ref(
+            arxiv_res.journal_ref, arxiv_res.year or year, arxiv_res.canonical_authors
+        )
+        if jr:
+            data, source = jr, "journal_ref"
+
+    if data is not None:
+        _prefer_canonical(data, arxiv_res.canonical_authors)
+        out["data"] = data
+        out["source"] = source
+        out["confidence"] = _SOURCE_CONFIDENCE.get(source, 0.0)
+
+    out["preprint_authors"] = (
+        arxiv_res.canonical_authors or dblp_res.preprint_authors or ss_res.preprint_authors
+    )
+    return out
+
+
 # ---------------------------------------------------------------------------
 # Public entry point
 # ---------------------------------------------------------------------------
@@ -280,79 +383,42 @@ def _resolve_by_doi(doi: str) -> Optional[dict]:
 def enrich_entry(entry: Entry) -> bool:
     """Enrich an arXiv preprint entry with published venue and full author data.
 
-    Returns True if the entry was modified in any way.
+    Confident matches are applied; low-confidence candidates are left as clean
+    ``@misc`` preprints with a ``note`` flagging the possible venue, so a wrong
+    venue is never written silently.  Returns True if the entry changed.
     """
     fields = {f.key: f.value for f in entry.fields}
+    res = resolve_entry(fields)
 
-    arxiv_id = extract_arxiv_id(fields)
+    arxiv_id = res["arxiv_id"]
     if not arxiv_id:
         return False
 
-    title = fields.get("title", "")
-    raw_author = fields.get("author", "")
-    authors = [a.strip() for a in re.split(r"\band\b", raw_author, flags=re.IGNORECASE) if a.strip()]
-    year = fields.get("year")
+    data = res["data"]
+    confidence = res["confidence"]
 
-    logger.debug(f"Processing {entry.key} (arXiv:{arxiv_id})")
-
-    # ---- Step 1: arXiv API — canonical authors, category, declared venue ----
-    arxiv_res = _lookup(
-        _arxiv,
-        ProviderQuery(title=title, authors=authors, year=year, arxiv_id=arxiv_id),
-    )
-    canonical_authors = arxiv_res.canonical_authors
-    primaryclass = arxiv_res.primaryclass
-    doi = fields.get("doi") or arxiv_res.doi  # prefer the entry's own DOI, else arXiv's
-
-    # Title-only query reused for the fuzzy-search providers.
-    tquery = ProviderQuery(title=title, authors=authors, year=year, arxiv_id=arxiv_id)
-
-    data: Optional[dict] = None
-
-    # ---- Step 2: DOI-first exact resolution ----
-    if doi:
-        data = _resolve_by_doi(doi)
-
-    # ---- Step 3: DBLP title search ----
-    dblp_res = ProviderResult()
-    if data is None:
-        dblp_res = _lookup(_dblp, tquery)
-        data = dblp_res.published_data
-
-    # ---- Step 4: CrossRef title search ----
-    cr_res = ProviderResult()
-    if data is None:
-        cr_res = _lookup(_crossref, tquery)
-        data = cr_res.published_data
-
-    # ---- Steps 5 & 6: SS + OpenAlex, only if DBLP/CrossRef didn't recognise it ----
-    ss_res = ProviderResult()
-    if data is None and not (dblp_res.matched or cr_res.matched):
-        ss_res = _lookup(_ss, tquery)
-        data = ss_res.published_data
-        if data is None:
-            data = _lookup(_openalex, tquery).published_data
-
-    # ---- Step 7: arXiv journal_ref fallback (known venues only) ----
-    if data is None and arxiv_res.journal_ref:
-        data = _data_from_journal_ref(
-            arxiv_res.journal_ref, arxiv_res.year or year, canonical_authors
-        )
-
-    # ---- Apply published data if we found any ----
-    if data:
-        _prefer_canonical(data, canonical_authors)
+    # Confident published match -> apply it.
+    if data is not None and confidence >= _MIN_CONFIDENCE:
         _apply(entry, data, fields)
-        logger.info(f"[published] {entry.key}")
+        logger.info(f"[published:{res['source']} {confidence:.2f}] {entry.key}")
         return True
 
-    # ---- Step 8: clean @misc preprint with the fullest author list ----
-    best_authors = canonical_authors
-    if not best_authors:
-        best_authors = dblp_res.preprint_authors or ss_res.preprint_authors
+    # Otherwise leave a clean @misc preprint...
+    _normalize_preprint(entry, fields, res["preprint_authors"], res["primaryclass"])
 
-    _normalize_preprint(entry, fields, best_authors, primaryclass)
-    changed = bool(best_authors) or "eprint" not in fields
+    # ...and if we *did* find a shaky candidate, flag it for manual review.
+    if data is not None:
+        venue = data.get("booktitle") or data.get("journal") or "?"
+        _set_field(
+            entry,
+            "note",
+            f"bibcleaner: possible match — {venue} ({data.get('year') or '?'}), "
+            f"confidence {confidence:.2f} via {res['source']}; verify before using",
+        )
+        logger.info(f"[low-confidence:{res['source']} {confidence:.2f}] {entry.key}")
+        return True
+
+    changed = bool(res["preprint_authors"]) or "eprint" not in fields
     if changed:
         logger.info(f"[preprint] {entry.key} (arXiv:{arxiv_id})")
     return changed

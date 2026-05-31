@@ -1,0 +1,20 @@
+{
+  "_comment": "Seed evaluation set: well-known arXiv papers with verified published venues. expected_type is the bibtex type; expected_venue is a token expected to appear in the resolved venue (case-insensitive); null venue + 'misc' marks a paper that was never formally published. Extend this list to strengthen the benchmark.",
+  "papers": [
+    {"arxiv_id": "1810.04805", "title": "BERT: Pre-training of Deep Bidirectional Transformers for Language Understanding", "expected_type": "inproceedings", "expected_venue": "NAACL", "expected_year": "2019"},
+    {"arxiv_id": "1706.03762", "title": "Attention Is All You Need", "expected_type": "inproceedings", "expected_venue": "NeurIPS", "expected_year": "2017"},
+    {"arxiv_id": "1412.6980", "title": "Adam: A Method for Stochastic Optimization", "expected_type": "inproceedings", "expected_venue": "ICLR", "expected_year": "2015"},
+    {"arxiv_id": "1512.03385", "title": "Deep Residual Learning for Image Recognition", "expected_type": "inproceedings", "expected_venue": "CVPR", "expected_year": "2016"},
+    {"arxiv_id": "1910.10683", "title": "Exploring the Limits of Transfer Learning with a Unified Text-to-Text Transformer", "expected_type": "article", "expected_venue": "JMLR", "expected_year": "2020"},
+    {"arxiv_id": "2005.14165", "title": "Language Models are Few-Shot Learners", "expected_type": "inproceedings", "expected_venue": "NeurIPS", "expected_year": "2020"},
+    {"arxiv_id": "1409.0473", "title": "Neural Machine Translation by Jointly Learning to Align and Translate", "expected_type": "inproceedings", "expected_venue": "ICLR", "expected_year": "2015"},
+    {"arxiv_id": "1502.03167", "title": "Batch Normalization: Accelerating Deep Network Training by Reducing Internal Covariate Shift", "expected_type": "inproceedings", "expected_venue": "ICML", "expected_year": "2015"},
+    {"arxiv_id": "1409.1556", "title": "Very Deep Convolutional Networks for Large-Scale Image Recognition", "expected_type": "inproceedings", "expected_venue": "ICLR", "expected_year": "2015"},
+    {"arxiv_id": "1908.10084", "title": "Sentence-BERT: Sentence Embeddings using Siamese BERT-Networks", "expected_type": "inproceedings", "expected_venue": "EMNLP", "expected_year": "2019"},
+    {"arxiv_id": "2010.11929", "title": "An Image is Worth 16x16 Words: Transformers for Image Recognition at Scale", "expected_type": "inproceedings", "expected_venue": "ICLR", "expected_year": "2021"},
+    {"arxiv_id": "1910.13461", "title": "BART: Denoising Sequence-to-Sequence Pre-training for Natural Language Generation, Translation, and Comprehension", "expected_type": "inproceedings", "expected_venue": "ACL", "expected_year": "2020"},
+    {"arxiv_id": "2303.17651", "title": "Self-Refine: Iterative Refinement with Self-Feedback", "expected_type": "inproceedings", "expected_venue": "NeurIPS", "expected_year": "2023"},
+    {"arxiv_id": "1802.05365", "title": "Deep contextualized word representations", "expected_type": "inproceedings", "expected_venue": "NAACL", "expected_year": "2018"},
+    {"arxiv_id": "1907.11692", "title": "RoBERTa: A Robustly Optimized BERT Pretraining Approach", "expected_type": "misc", "expected_venue": null, "expected_year": "2019"}
+  ]
+}

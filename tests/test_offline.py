@@ -1,5 +1,7 @@
 """Offline (no-network) tests for the LaTeX-friendly cleaning features."""
 
+import bibcleaner.enricher as E
+from bibcleaner.providers import ProviderResult
 from bibtexparser.model import Entry, Field
 
 from bibcleaner.latex import protect_title_caps
@@ -200,3 +202,53 @@ def test_venue_strips_volume_keyword():
 def test_venue_plain_still_matches():
     assert normalize_venue("NeurIPS") == "Advances in Neural Information Processing Systems (NeurIPS)"
     assert normalize_venue("Totally Unknown Venue 2024") is None
+
+
+# --------------------------------------------------------------------------
+# confidence scoring + low-confidence flagging (providers monkeypatched)
+# --------------------------------------------------------------------------
+
+def _arxiv_preprint_entry():
+    return _entry(
+        "article", "k",
+        title="Some Paper Title",
+        author="Doe, Jane and others",
+        journal="arXiv preprint arXiv:2303.17651",
+        year="2023",
+    )
+
+
+def test_confident_doi_match_is_applied(monkeypatch):
+    E._lookup_cache.clear()
+    monkeypatch.setattr(E._arxiv, "lookup",
+                        lambda q: ProviderResult(canonical_authors=["Jane Doe"], doi="10.1/x", matched=True))
+    monkeypatch.setattr(E._crossref, "lookup",
+                        lambda q: ProviderResult(published_data={"entry_type": "inproceedings", "booktitle": "NeurIPS", "year": "2023", "authors": []}, matched=True))
+    monkeypatch.setattr(E._openalex, "lookup", lambda q: ProviderResult())
+    monkeypatch.setattr(E._dblp, "lookup", lambda q: ProviderResult())
+    monkeypatch.setattr(E._ss, "lookup", lambda q: ProviderResult())
+
+    e = _arxiv_preprint_entry()
+    assert E.enrich_entry(e) is True
+    f = {x.key: x.value for x in e.fields}
+    assert e.entry_type == "inproceedings"
+    assert "(NeurIPS)" in f.get("booktitle", "")
+    assert "note" not in f
+
+
+def test_low_confidence_openalex_is_flagged_not_applied(monkeypatch):
+    E._lookup_cache.clear()
+    monkeypatch.setattr(E._arxiv, "lookup",
+                        lambda q: ProviderResult(canonical_authors=["Jane Doe"], matched=True))
+    monkeypatch.setattr(E._dblp, "lookup", lambda q: ProviderResult(matched=False))
+    monkeypatch.setattr(E._crossref, "lookup", lambda q: ProviderResult(matched=False))
+    monkeypatch.setattr(E._ss, "lookup", lambda q: ProviderResult())
+    monkeypatch.setattr(E._openalex, "lookup",
+                        lambda q: ProviderResult(published_data={"entry_type": "inproceedings", "booktitle": "NeurIPS", "year": "2023", "authors": []}, matched=True))
+
+    e = _arxiv_preprint_entry()
+    assert E.enrich_entry(e) is True
+    f = {x.key: x.value for x in e.fields}
+    assert e.entry_type == "misc"          # NOT applied — left as a clean preprint
+    assert "eprint" in f
+    assert "note" in f and "0.75" in f["note"] and "openalex" in f["note"]
