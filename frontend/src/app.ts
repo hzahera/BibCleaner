@@ -12,6 +12,8 @@ import {
     normalizeBibText,
 } from "./helpers";
 import logoUrl from "../logo.png";
+import upbLogoUrl from "../UPB.png";
+import diceLogoUrl from "../DICE.png";
 
 type FetchLike = typeof fetch;
 
@@ -149,7 +151,26 @@ export class BibCleanerApp {
                         </details>
                     </section>
         </section>
+        
       </main>
+            <section class="support-section" aria-labelledby="supported-by-title">
+                <div class="support-section__header">
+                    <p class="support-section__eyebrow">Contributing Institutions</p>
+                    <h2 id="supported-by-title" class="support-section__title">Supported By</h2>
+                </div>
+                <div class="support-section__logos" aria-label="Supporting institutions">
+                    <a href="https://www.uni-paderborn.de/" target="_blank" rel="noopener">
+                        <figure class="support-logo-card support-logo-card--upb">
+                            <img src="${upbLogoUrl}" alt="UPB logo" class="support-logo support-logo--upb" />
+                        </figure>
+                    </a>
+                    <a href="https://dice-research.org/" target="_blank" rel="noopener">
+                        <figure class="support-logo-card support-logo-card--dice">
+                            <img src="${diceLogoUrl}" alt="DICE logo" class="support-logo support-logo--dice" />
+                        </figure>
+                    </a>
+                </div>
+            </section>
     `;
 
         container.replaceChildren(root);

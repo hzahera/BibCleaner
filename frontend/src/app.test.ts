@@ -1,6 +1,8 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { BibCleanerApp } from "./app";
 import logoUrl from "../logo.png";
+import upbLogoUrl from "../UPB.png";
+import diceLogoUrl from "../DICE.png";
 import {
     createBibUploadFile,
     createDownloadBlob,
@@ -143,11 +145,17 @@ describe("BibCleaner frontend app", () => {
         const app = new BibCleanerApp({ document, fetchImpl: vi.fn(), apiBase: "/api" });
         const root = app.mount(document.getElementById("app") as HTMLElement);
 
-        const logo = root.querySelector("header img");
-        expect(logo).toBeTruthy();
-        expect(logo?.getAttribute("alt")).toBe("BibCleaner Logo");
-        expect(logo?.getAttribute("src")).toBe(logoUrl);
+        const logos = root.querySelectorAll("img");
+        expect(logos).toHaveLength(3);
+        expect(logos[0]?.getAttribute("alt")).toBe("BibCleaner Logo");
+        expect(logos[0]?.getAttribute("src")).toBe(logoUrl);
         expect(root.querySelectorAll(".panel")).toHaveLength(2);
+        const supportedBy = root.querySelector("#supported-by-title");
+        expect(supportedBy?.textContent).toBe("Supported By");
+        expect(logos[1]?.getAttribute("alt")).toBe("UPB logo");
+        expect(logos[1]?.getAttribute("src")).toBe(upbLogoUrl);
+        expect(logos[2]?.getAttribute("alt")).toBe("DICE logo");
+        expect(logos[2]?.getAttribute("src")).toBe(diceLogoUrl);
         expect(root.querySelector("[data-action='upload']")).toBeTruthy();
         expect(root.querySelector("[data-action='clean']")).toBeTruthy();
         expect(root.querySelector("[data-action='download']")).toBeTruthy();
