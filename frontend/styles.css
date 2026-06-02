@@ -278,6 +278,8 @@ button:disabled {
 
 .validation-results__dropdown {
     padding: 0.5rem 0.75rem;
+    max-height: 12.5rem;
+    overflow: auto;
 }
 
 .validation-results__summary {
