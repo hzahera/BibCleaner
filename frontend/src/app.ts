@@ -12,6 +12,8 @@ import {
     normalizeBibText,
 } from "./helpers";
 import logoUrl from "../logo.png";
+import upbLogoUrl from "../UPB.png";
+import diceLogoUrl from "../DICE.png";
 
 type FetchLike = typeof fetch;
 
@@ -104,6 +106,15 @@ export class BibCleanerApp {
             autocapitalize="off"
             placeholder="Paste BibTeX here or upload a .bib file..."
           ></textarea>
+          <div class="panel__options-checkbox">
+            <fieldset>
+                <legend>Options</legend>
+                <span><input type="checkbox" id="protect_caps" name="protect_caps" checked/><label for="protect_caps">Title capitalization protection</label></span>
+                <span><input type="checkbox" id="dedup" name="dedup" checked/><label for="dedup">Duplicate merging</label></span>
+                <span><input type="checkbox" id="normalize_keys" name="normalize_keys" checked/><label for="normalize_keys">Normalize entry keys</label></span>
+                <span><input type="checkbox" id="validate" name="validate" checked/><label for="validate">Validate bibliography</label></span>
+            </fieldset>
+          </div>
           <div class="panel__submit-row">
             <button type="button" class="button--primary" data-action="clean">Clean bibliography</button>
                         <span
@@ -140,7 +151,26 @@ export class BibCleanerApp {
                         </details>
                     </section>
         </section>
+        
       </main>
+            <section class="support-section" aria-labelledby="supported-by-title">
+                <div class="support-section__header">
+                    <p class="support-section__eyebrow">Contributing Institutions</p>
+                    <h2 id="supported-by-title" class="support-section__title">Supported By</h2>
+                </div>
+                <div class="support-section__logos" aria-label="Supporting institutions">
+                    <a href="https://www.uni-paderborn.de/" target="_blank" rel="noopener">
+                        <figure class="support-logo-card support-logo-card--upb">
+                            <img src="${upbLogoUrl}" alt="UPB logo" class="support-logo support-logo--upb" />
+                        </figure>
+                    </a>
+                    <a href="https://dice-research.org/" target="_blank" rel="noopener">
+                        <figure class="support-logo-card support-logo-card--dice">
+                            <img src="${diceLogoUrl}" alt="DICE logo" class="support-logo support-logo--dice" />
+                        </figure>
+                    </a>
+                </div>
+            </section>
     `;
 
         container.replaceChildren(root);
@@ -226,6 +256,14 @@ export class BibCleanerApp {
         const elements = this.ensureElements();
         const bibFile = createBibUploadFile(normalizedText, sourceFilename);
         const formData = new FormData();
+        const options = [
+            { name: "protect_caps", element: document.getElementById("protect_caps") as HTMLInputElement },
+            { name: "dedup", element: document.getElementById("dedup") as HTMLInputElement },
+            { name: "normalize_keys", element: document.getElementById("normalize_keys") as HTMLInputElement },
+        ];
+        options.forEach(option => {
+            formData.append(option.name, option.element.checked ? "true" : "false");
+        });
         formData.append("file", bibFile);
 
         this.setBusy(true, "Submitting bibliography for cleaning...");
@@ -269,12 +307,17 @@ export class BibCleanerApp {
                 responseFilename ?? deriveDownloadFilename(sourceFilename);
 
             this.setProcessingMessage("Validating output...");
-            const validationResults = await this.fetchValidationResults(
-                cleaned,
-                this.currentDownloadFilename,
-            );
-            this.renderValidationResults(validationResults);
-            this.showSuccess("Bibliography cleaned and validated successfully.");
+            let will_validate = document.getElementById("validate") as HTMLInputElement;
+            if (will_validate.checked) {
+                const validationResults = await this.fetchValidationResults(
+                    cleaned,
+                    this.currentDownloadFilename,
+                );
+                this.renderValidationResults(validationResults);
+                this.showSuccess("Bibliography cleaned and validated successfully.");
+            } else {
+                this.showSuccess("Bibliography cleaned successfully.");
+            }
         } catch (error) {
             const message = error instanceof Error ? error.message : "Unexpected API error";
             this.showError(message);
@@ -431,10 +474,10 @@ export class BibCleanerApp {
 
         const errorsLine = this.document.createElement("p");
         errorsLine.className = "validation-entry__line validation-entry__line--error";
-        errorsLine.textContent =
-            result.errors.length > 0
-                ? `Missing required: ${result.errors.join(", ")}`
-                : "Missing required: none";
+        if (result.errors.length > 0) {
+            errorsLine.textContent = `Missing required: ${result.errors.join(", ")}`;
+        }
+        else { errorsLine.style.display = "none"; }
         wrapper.append(errorsLine);
 
         const warningsLine = this.document.createElement("p");
