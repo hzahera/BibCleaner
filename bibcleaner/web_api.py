@@ -215,6 +215,7 @@ async def create_job(
     enrich: str | None = Form(default=None),
     dedup: str | None = Form(default=None),
     protect_caps: str | None = Form(default=None),
+    normalize_keys: str | None = Form(default=None),
 ) -> dict:
     _enforce_rate_limit(request)
     filename, raw = await _read_upload(file)
@@ -225,6 +226,7 @@ async def create_job(
         "enrich": _as_bool(enrich, True),
         "dedup": _as_bool(dedup, False),
         "protect_caps": _as_bool(protect_caps, True),
+        "normalize_keys": _as_bool(normalize_keys, True),
     }
     job = Job(id=uuid.uuid4().hex, filename=f"cleaned_{filename}")
     with _jobs_lock:

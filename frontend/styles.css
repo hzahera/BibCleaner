@@ -164,6 +164,17 @@ button:disabled {
     background: #f8fafc;
 }
 
+.panel__options-checkbox fieldset {
+    border: 1px solid #cbd5e1;
+    border-radius: 14px;
+    padding: 0.75rem 1rem;
+}
+
+.panel__options-checkbox legend {
+    font-weight: 700;
+    color: #1e3a8a;
+}
+
 .panel__submit-row {
     display: flex;
     justify-content: flex-start;
