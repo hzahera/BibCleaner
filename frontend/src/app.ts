@@ -333,12 +333,14 @@ export class BibCleanerApp {
         elements.status.textContent = label;
     }
 
-    private setBusy(isBusy: boolean): void {
+    private setBusy(isBusy: boolean, message?: string): void {
         const elements = this.ensureElements();
         elements.uploadButton.disabled = isBusy;
         elements.cleanButton.disabled = isBusy;
         elements.downloadButton.disabled = isBusy;
-        elements.processingIndicatorText.textContent = message;
+        if (message) {
+            elements.processingIndicatorText.textContent = message;
+        }
         elements.processingIndicator.hidden = !isBusy;
     }
 

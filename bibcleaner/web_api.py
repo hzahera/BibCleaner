@@ -151,7 +151,7 @@ def _run_job(job_id: str, text: str, filename: str, opts: dict) -> None:
 
 
 # ---- Upload validation ----------------------------------------------------
-async def _read_upload(file: Optional[UploadFile]) -> tuple[str, str]:
+async def _read_upload(file: Optional[UploadFile]) -> tuple[str, bytes]:
     if file is None:
         raise HTTPException(status_code=400, detail="Missing file upload field 'file'")
 
@@ -170,16 +170,7 @@ async def _read_upload(file: Optional[UploadFile]) -> tuple[str, str]:
     return filename, raw
 
 
-@app.get("/health")
-def health() -> dict:
-    return {"status": "healthy", "service": APP_NAME, "version": __version__}
-
-
-@app.post("/clear-bib")
-@app.post("/clean-bib")
-async def clear_bib(file: UploadFile | None = File(default=None)) -> Response:
-    filename, raw = await _read_upload(file)
-
+def _decode_upload_text(raw: bytes) -> str:
     try:
         text = raw.decode("utf-8")
     except UnicodeDecodeError as exc:
@@ -195,7 +186,7 @@ async def clear_bib(file: UploadFile | None = File(default=None)) -> Response:
             status_code=413,
             detail=f"Too many entries ({n_entries}); limit is {MAX_ENTRIES}",
         )
-    return text, filename
+    return text
 
 
 def _as_bool(value: Optional[str], default: bool) -> bool:
@@ -226,7 +217,8 @@ async def create_job(
     protect_caps: str | None = Form(default=None),
 ) -> dict:
     _enforce_rate_limit(request)
-    text, filename = await _read_upload(file)
+    filename, raw = await _read_upload(file)
+    text = _decode_upload_text(raw)
     _prune_jobs()
 
     opts = {
@@ -276,7 +268,8 @@ async def clean_bib_sync(
 ) -> Response:
     """Synchronous convenience endpoint (small uploads / programmatic use)."""
     _enforce_rate_limit(request)
-    text, filename = await _read_upload(file)
+    filename, raw = await _read_upload(file)
+    text = _decode_upload_text(raw)
     try:
         cleaned = await run_in_threadpool(process_bibliography_content, text)
     except ValueError as exc:

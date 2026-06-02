@@ -48,6 +48,27 @@ function createJsonResponse(
     } as unknown as Response;
 }
 
+function findCall(
+    calls: unknown[][],
+    predicate: (url: string, init?: RequestInit) => boolean,
+): [string, RequestInit | undefined] | undefined {
+    for (const call of calls) {
+        const [url, init] = call as [string, RequestInit | undefined];
+        if (predicate(url, init)) {
+            return [url, init];
+        }
+    }
+
+    return undefined;
+}
+
+function hasCall(
+    calls: unknown[][],
+    predicate: (url: string, init?: RequestInit) => boolean,
+): boolean {
+    return findCall(calls, predicate) !== undefined;
+}
+
 /** A fetch mock that walks the create -> poll -> result job flow. */
 function jobFetch(opts: { cleaned?: string; filename?: string | null; jobId?: string } = {}) {
     const { cleaned = "@article{demo,title={Cleaned}}\n", filename = "cleaned_refs.bib", jobId = "j1" } = opts;
@@ -64,6 +85,9 @@ function jobFetch(opts: { cleaned?: string; filename?: string | null; jobId?: st
                     headers: filename ? { "content-disposition": `attachment; filename="${filename}"` } : {},
                 }),
             );
+        }
+        if (url.endsWith("/validation")) {
+            return Promise.resolve(createJsonResponse([]));
         }
         throw new Error(`unexpected request: ${url}`);
     });
@@ -110,6 +134,7 @@ describe("BibCleaner frontend helpers", () => {
 
 describe("BibCleaner frontend app", () => {
     beforeEach(() => {
+        vi.restoreAllMocks();
         document.body.innerHTML = '<div id="app"></div>';
     });
 
@@ -132,16 +157,18 @@ describe("BibCleaner frontend app", () => {
         app.mount(document.getElementById("app") as HTMLElement);
         await app.loadFile(new File(["@article{demo,title={Raw}}"], "refs.bib", { type: "application/x-bibtex" }));
 
-        // create -> poll -> result
-        const createCall = fetchMock.mock.calls.find(([url, init]) => url === "/api/jobs" && init?.method === "POST");
+        const createCall = findCall(
+            fetchMock.mock.calls as unknown[][],
+            (url, init) => url === "/api/jobs" && init?.method === "POST",
+        );
         expect(createCall).toBeTruthy();
         const formData = createCall?.[1]?.body as FormData;
         const uploaded = formData.get("file") as File;
         expect(uploaded.name).toBe("refs.bib");
         expect(uploaded.type).toBe("application/x-bibtex");
 
-        expect(fetchMock.mock.calls.some(([url]) => url === "/api/jobs/j1")).toBe(true);
-        expect(fetchMock.mock.calls.some(([url]) => url === "/api/jobs/j1/result")).toBe(true);
+        expect(hasCall(fetchMock.mock.calls as unknown[][], (url) => url === "/api/jobs/j1")).toBe(true);
+        expect(hasCall(fetchMock.mock.calls as unknown[][], (url) => url === "/api/jobs/j1/result")).toBe(true);
 
         expect((document.querySelector("[data-role='input-textarea']") as HTMLTextAreaElement).value)
             .toContain("@article{demo,title={Raw}}");
@@ -160,7 +187,10 @@ describe("BibCleaner frontend app", () => {
 
         await app.submitCurrentContent();
 
-        const createCall = fetchMock.mock.calls.find(([url, init]) => url === "/api/jobs" && init?.method === "POST");
+        const createCall = findCall(
+            fetchMock.mock.calls as unknown[][],
+            (url, init) => url === "/api/jobs" && init?.method === "POST",
+        );
         const formData = createCall?.[1]?.body as FormData;
         const uploaded = formData.get("file") as File;
         expect(uploaded.name).toBe("bibliography.bib");
@@ -169,83 +199,108 @@ describe("BibCleaner frontend app", () => {
     });
 
     it("updates spinner text while moving from processing to validation", async () => {
-        let resolveValidation: ((response: Response) => void) | null = null;
-        const fetchMock = vi
-            .fn()
-            .mockResolvedValueOnce(createJsonResponse("@article{demo,title={Typed}}\n"))
-            .mockImplementationOnce(
-                () =>
-                    new Promise<Response>((resolve) => {
-                        resolveValidation = resolve;
-                    }),
-            );
-        const app = new BibCleanerApp({ document, fetchImpl: fetchMock, apiEndpoint: "/api/clean-bib" });
-        it("surfaces a job error to the user", async () => {
-            const fetchMock = vi.fn().mockImplementation((url: string, init?: RequestInit) => {
-                if (url.endsWith("/jobs") && init?.method === "POST") {
-                    return Promise.resolve(jsonResponse({ job_id: "j1" }, { status: 202 }));
-                }
-                if (url.endsWith("/jobs/j1")) {
-                    return Promise.resolve(jsonResponse({ status: "error", error: "No BibTeX entries found" }));
-                }
-                throw new Error(`unexpected request: ${url}`);
-            });
-            const app = new BibCleanerApp({ document, fetchImpl: fetchMock, apiBase: "/api", pollIntervalMs: 0 });
-
-            app.mount(document.getElementById("app") as HTMLElement);
-            const input = document.querySelector("[data-role='input-textarea']") as HTMLTextAreaElement;
-            input.value = "not bibtex";
-            await app.submitCurrentContent();
-
-            const status = document.querySelector(".status-message") as HTMLParagraphElement;
-            expect(status.dataset.state).toBe("error");
-            expect(status.textContent).toContain("No BibTeX entries found");
-        });
-
-        it("shows a loading indicator only while submit is in progress", async () => {
-            let resolveCreate!: (response: Response) => void;
-            const fetchMock = vi.fn().mockImplementation((url: string, init?: RequestInit) => {
-                if (url.endsWith("/jobs") && init?.method === "POST") {
-                    return new Promise<Response>((resolve) => {
-                        resolveCreate = resolve;
-                    });
-                }
-                if (url.endsWith("/jobs/j1")) {
-                    return Promise.resolve(jsonResponse({ status: "done", done: 1, total: 1 }));
-                }
+        const validationState: { resolve?: (response: Response) => void } = {};
+        const fetchMock = vi.fn().mockImplementation((url: string, init?: RequestInit) => {
+            if (url === "/api/jobs" && init?.method === "POST") {
+                return Promise.resolve(jsonResponse({ job_id: "j1", status: "queued" }, { status: 202 }));
+            }
+            if (url === "/api/jobs/j1") {
+                return Promise.resolve(jsonResponse({ status: "done", done: 1, total: 1 }));
+            }
+            if (url === "/api/jobs/j1/result") {
                 return Promise.resolve(textResponse("@article{demo,title={Typed}}\n"));
-            });
-            const app = new BibCleanerApp({ document, fetchImpl: fetchMock, apiBase: "/api", pollIntervalMs: 0 });
-
-            app.mount(document.getElementById("app") as HTMLElement);
-            const input = document.querySelector("[data-role='input-textarea']") as HTMLTextAreaElement;
-            const cleanButton = document.querySelector("[data-action='clean']") as HTMLButtonElement;
-            const indicator = document.querySelector("[data-role='processing-indicator']") as HTMLSpanElement;
-
-            input.value = "@article{typed,title={Example}}";
-            const pending = app.submitCurrentContent();
-
-            expect(cleanButton.disabled).toBe(true);
-            expect(indicator.hidden).toBe(false);
-            expect(indicator.textContent).toContain("Processing bibliography...");
-
-            await Promise.resolve();
-            expect(indicator.textContent).toContain("Validating output...");
-
-            resolveValidation?.(createJsonResponse([]));
-            await pending;
-            resolveCreate(jsonResponse({ job_id: "j1" }, { status: 202 }));
-            await pending;
-
-            expect(cleanButton.disabled).toBe(false);
-            expect(indicator.hidden).toBe(true);
+            }
+            if (url === "/api/custom-validation") {
+                return new Promise<Response>((resolve) => {
+                    validationState.resolve = resolve;
+                });
+            }
+            throw new Error(`unexpected request: ${url}`);
         });
 
-        it("renders validation dropdown content when validation returns results", async () => {
-            const fetchMock = vi
-                .fn()
-                .mockResolvedValueOnce(createJsonResponse("@article{demo,title={Cleaned}}\n"))
-                .mockResolvedValueOnce(
+        const app = new BibCleanerApp({
+            document,
+            fetchImpl: fetchMock,
+            apiBase: "/api",
+            validationEndpoint: "/api/custom-validation",
+            pollIntervalMs: 0,
+        });
+
+        app.mount(document.getElementById("app") as HTMLElement);
+        const input = document.querySelector("[data-role='input-textarea']") as HTMLTextAreaElement;
+        const uploadButton = document.querySelector("[data-action='upload']") as HTMLButtonElement;
+        const cleanButton = document.querySelector("[data-action='clean']") as HTMLButtonElement;
+        const downloadButton = document.querySelector("[data-action='download']") as HTMLButtonElement;
+        const indicator = document.querySelector("[data-role='processing-indicator']") as HTMLSpanElement;
+        input.value = "@article{typed,title={Example}}";
+
+        const pending = app.submitCurrentContent();
+
+        expect(uploadButton.disabled).toBe(true);
+        expect(cleanButton.disabled).toBe(true);
+        expect(downloadButton.disabled).toBe(true);
+        expect(indicator.hidden).toBe(false);
+        expect(indicator.textContent).toContain("Processing bibliography...");
+
+        await Promise.resolve();
+        await Promise.resolve();
+        expect(indicator.textContent).toContain("Validating output...");
+
+        const resolveValidation = validationState.resolve;
+        if (!resolveValidation) {
+            throw new Error("validation resolver was not captured");
+        }
+        resolveValidation(createJsonResponse([]));
+        await pending;
+
+        expect(uploadButton.disabled).toBe(false);
+        expect(cleanButton.disabled).toBe(false);
+        expect(downloadButton.disabled).toBe(false);
+        expect(indicator.hidden).toBe(true);
+    });
+
+    it("surfaces a job error to the user and clears busy state", async () => {
+        const fetchMock = vi.fn().mockImplementation((url: string, init?: RequestInit) => {
+            if (url === "/api/jobs" && init?.method === "POST") {
+                return Promise.resolve(jsonResponse({ job_id: "j1" }, { status: 202 }));
+            }
+            if (url === "/api/jobs/j1") {
+                return Promise.resolve(
+                    jsonResponse({ status: "error", error: "No BibTeX entries found" }),
+                );
+            }
+            throw new Error(`unexpected request: ${url}`);
+        });
+        const app = new BibCleanerApp({ document, fetchImpl: fetchMock, apiBase: "/api", pollIntervalMs: 0 });
+
+        app.mount(document.getElementById("app") as HTMLElement);
+        const input = document.querySelector("[data-role='input-textarea']") as HTMLTextAreaElement;
+        const cleanButton = document.querySelector("[data-action='clean']") as HTMLButtonElement;
+        const indicator = document.querySelector("[data-role='processing-indicator']") as HTMLSpanElement;
+        input.value = "not bibtex";
+
+        await app.submitCurrentContent();
+
+        const status = document.querySelector(".status-message") as HTMLParagraphElement;
+        expect(status.dataset.state).toBe("error");
+        expect(status.textContent).toContain("No BibTeX entries found");
+        expect(cleanButton.disabled).toBe(false);
+        expect(indicator.hidden).toBe(true);
+    });
+
+    it("renders validation dropdown content when validation returns results", async () => {
+        const fetchMock = vi.fn().mockImplementation((url: string, init?: RequestInit) => {
+            if (url === "/api/jobs" && init?.method === "POST") {
+                return Promise.resolve(jsonResponse({ job_id: "j1" }, { status: 202 }));
+            }
+            if (url === "/api/jobs/j1") {
+                return Promise.resolve(jsonResponse({ status: "done", done: 1, total: 1 }));
+            }
+            if (url === "/api/jobs/j1/result") {
+                return Promise.resolve(textResponse("@article{demo,title={Cleaned}}\n"));
+            }
+            if (url === "/api/validation") {
+                return Promise.resolve(
                     createJsonResponse([
                         {
                             entry_id: "demo",
@@ -254,68 +309,65 @@ describe("BibCleaner frontend app", () => {
                         },
                     ]),
                 );
-            const app = new BibCleanerApp({ document, fetchImpl: fetchMock, apiEndpoint: "/api/clean-bib" });
-
-            app.mount(document.getElementById("app") as HTMLElement);
-
-            const input = document.querySelector("[data-role='input-textarea']") as HTMLTextAreaElement;
-            input.value = "@article{demo,title={Example}}";
-
-            await app.submitCurrentContent();
-
-            const validationContainer = document.querySelector(
-                "[data-role='validation-results']",
-            ) as HTMLElement;
-            expect(validationContainer.hidden).toBe(false);
-            expect(document.querySelector("[data-role='validation-summary']")?.textContent).toContain(
-                "Validation results",
-            );
-            expect(document.querySelector("[data-role='validation-content']")?.textContent).toContain(
-                "demo",
-            );
-            expect(document.querySelector("[data-role='validation-content']")?.textContent).toContain(
-                "Missing required: author",
-            );
-            expect(document.querySelector("[data-role='validation-content']")?.textContent).toContain(
-                "Missing optional: doi, url",
-            );
+            }
+            throw new Error(`unexpected request: ${url}`);
         });
+        const app = new BibCleanerApp({ document, fetchImpl: fetchMock, apiBase: "/api", pollIntervalMs: 0 });
 
-        it("downloads the current output using the latest filename", async () => {
-            const fetchMock = vi
-                .fn()
-                .mockResolvedValueOnce(
-                    createJsonResponse("@article{demo,title={Cleaned}}\n", {
-                        headers: { "content-disposition": 'attachment; filename="cleaned_refs.bib"' },
-                    }),
-                )
-                .mockResolvedValueOnce(createJsonResponse([]));
-            it("downloads the current output using the latest filename", async () => {
-                const fetchMock = jobFetch({ filename: "cleaned_refs.bib" });
-                const clickMock = vi.fn();
-                const createObjectUrlMock = vi.spyOn(URL, "createObjectURL").mockReturnValue("blob:123");
-                const revokeObjectUrlMock = vi.spyOn(URL, "revokeObjectURL").mockImplementation(() => undefined);
-                const anchor = document.createElement("a");
-                Object.defineProperty(anchor, "click", { value: clickMock });
-                const createElementSpy = vi.spyOn(document, "createElement").mockImplementation((tagName: string) => {
-                    if (tagName.toLowerCase() === "a") {
-                        return anchor;
-                    }
-                    return document.createElementNS("http://www.w3.org/1999/xhtml", tagName) as HTMLElement;
-                });
+        app.mount(document.getElementById("app") as HTMLElement);
+        const input = document.querySelector("[data-role='input-textarea']") as HTMLTextAreaElement;
+        input.value = "@article{demo,title={Example}}";
 
-                const app = new BibCleanerApp({ document, fetchImpl: fetchMock, apiBase: "/api", pollIntervalMs: 0 });
-                app.mount(document.getElementById("app") as HTMLElement);
+        await app.submitCurrentContent();
 
-                await app.loadFile(new File(["@article{demo,title={Raw}}"], "refs.bib", { type: "application/octet-stream" }));
-                app.downloadCurrentOutput();
+        const validationContainer = document.querySelector(
+            "[data-role='validation-results']",
+        ) as HTMLElement;
+        expect(validationContainer.hidden).toBe(false);
+        expect(document.querySelector("[data-role='validation-summary']")?.textContent).toContain(
+            "Validation results",
+        );
+        expect(document.querySelector("[data-role='validation-content']")?.textContent).toContain(
+            "demo",
+        );
+        expect(document.querySelector("[data-role='validation-content']")?.textContent).toContain(
+            "Missing required: author",
+        );
+        expect(document.querySelector("[data-role='validation-content']")?.textContent).toContain(
+            "Missing optional: doi, url",
+        );
+    });
 
-                expect(createObjectUrlMock).toHaveBeenCalledTimes(1);
-                expect(anchor.download).toBe("cleaned_refs.bib");
-                expect(clickMock).toHaveBeenCalledTimes(1);
+    it("downloads the current output using the latest filename", async () => {
+        const fetchMock = jobFetch({ filename: "cleaned_refs.bib" });
+        const clickMock = vi.fn();
+        const createObjectUrlMock = vi.spyOn(URL, "createObjectURL").mockReturnValue("blob:123");
+        const revokeObjectUrlMock = vi.spyOn(URL, "revokeObjectURL").mockImplementation(() => undefined);
+        const originalCreateElement = document.createElement.bind(document);
+        const anchor = originalCreateElement("a");
+        Object.defineProperty(anchor, "click", { value: clickMock });
+        const createElementSpy = vi.spyOn(document, "createElement").mockImplementation(
+            ((tagName: string, options?: ElementCreationOptions) => {
+                if (tagName.toLowerCase() === "a") {
+                    return anchor;
+                }
 
-                createObjectUrlMock.mockRestore();
-                revokeObjectUrlMock.mockRestore();
-                createElementSpy.mockRestore();
-            });
-        });
+                return originalCreateElement(tagName, options);
+            }) as typeof document.createElement,
+        );
+
+        const app = new BibCleanerApp({ document, fetchImpl: fetchMock, apiBase: "/api", pollIntervalMs: 0 });
+        app.mount(document.getElementById("app") as HTMLElement);
+
+        await app.loadFile(new File(["@article{demo,title={Raw}}"], "refs.bib", { type: "application/octet-stream" }));
+        app.downloadCurrentOutput();
+
+        expect(createObjectUrlMock).toHaveBeenCalledTimes(1);
+        expect(anchor.download).toBe("cleaned_refs.bib");
+        expect(clickMock).toHaveBeenCalledTimes(1);
+
+        createObjectUrlMock.mockRestore();
+        revokeObjectUrlMock.mockRestore();
+        createElementSpy.mockRestore();
+    });
+});
