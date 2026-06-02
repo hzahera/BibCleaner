@@ -11,6 +11,7 @@ import {
     responseErrorMessage,
     normalizeBibText,
 } from "./helpers";
+import logoUrl from "../logo.png";
 
 type FetchLike = typeof fetch;
 
@@ -53,6 +54,12 @@ export interface BibCleanerAppOptions {
     pollTimeoutMs?: number;
 }
 
+interface JobProgressSnapshot {
+    status: string;
+    done: number | null;
+    total: number | null;
+}
+
 export class BibCleanerApp {
     private readonly document: Document;
     private readonly fetchImpl: FetchLike;
@@ -69,7 +76,7 @@ export class BibCleanerApp {
         this.validationEndpoint = options.validationEndpoint ?? VALIDATION_ENDPOINT;
         this.apiBase = (options.apiBase ?? API_BASE).replace(/\/+$/u, "");
         this.pollIntervalMs = options.pollIntervalMs ?? 1000;
-        this.pollTimeoutMs = options.pollTimeoutMs ?? 180000;
+        this.pollTimeoutMs = options.pollTimeoutMs ?? 300000;
     }
 
     mount(container: HTMLElement): HTMLElement {
@@ -77,13 +84,13 @@ export class BibCleanerApp {
         root.className = "app-shell";
         root.innerHTML = `
       <header class="app-header">
-        <h1>BibCleaner</h1>
+                <img src="${logoUrl}" alt="BibCleaner Logo"/>
       </header>
       <p class="status-message" role="alert" aria-live="polite"></p>
       <main class="app-main">
         <section class="panel panel--input" aria-label="Input bibliography">
           <div class="panel__toolbar">
-            <label for="bib-input">Please, write or upload you .bib file</label>
+            <label for="bib-input">Please, write or upload your .bib file</label>
             <div class="panel__actions">
               <button type="button" class="button--secondary" data-action="upload">Upload</button>
               <input class="visually-hidden" type="file" accept=".bib" data-role="file-input" />
@@ -221,7 +228,7 @@ export class BibCleanerApp {
         const formData = new FormData();
         formData.append("file", bibFile);
 
-        this.setBusy(true, "Processing bibliography...");
+        this.setBusy(true, "Submitting bibliography for cleaning...");
         this.clearStatus();
         this.renderValidationResults([]);
 
@@ -302,22 +309,59 @@ export class BibCleanerApp {
     }
 
     private async pollJob(jobId: string): Promise<JobStatus> {
-        const deadline = Date.now() + this.pollTimeoutMs;
+        let lastProgress = this.createProgressSnapshot({ status: "queued" });
+        let lastActivityAt = Date.now();
+
         for (; ;) {
             const response = await this.fetchImpl(`${this.apiBase}/jobs/${jobId}`);
             if (!response.ok) {
                 throw new Error(await responseErrorMessage(response));
             }
+
             const status = (await response.json()) as JobStatus;
             if (status.status === "done" || status.status === "error") {
                 return status;
             }
+
             this.showProgress(status);
-            if (Date.now() >= deadline) {
-                throw new Error("Timed out waiting for the server to finish.");
+
+            const currentProgress = this.createProgressSnapshot(status);
+            if (this.hasProgressChanged(lastProgress, currentProgress)) {
+                lastProgress = currentProgress;
+                lastActivityAt = Date.now();
             }
+
+            if (Date.now() - lastActivityAt >= this.pollTimeoutMs) {
+                throw new Error(
+                    "Timed out waiting for job progress. The server appears stalled.",
+                );
+            }
+
             await this.delay(this.pollIntervalMs);
         }
+    }
+
+    private createProgressSnapshot(status: JobStatus): JobProgressSnapshot {
+        return {
+            status: status.status,
+            done: typeof status.done === "number" ? status.done : null,
+            total: typeof status.total === "number" ? status.total : null,
+        };
+    }
+
+    private hasProgressChanged(
+        previous: JobProgressSnapshot,
+        next: JobProgressSnapshot,
+    ): boolean {
+        if (previous.status !== next.status) {
+            return true;
+        }
+
+        if (previous.done !== next.done) {
+            return true;
+        }
+
+        return previous.total !== next.total;
     }
 
     private delay(ms: number): Promise<void> {
@@ -326,11 +370,14 @@ export class BibCleanerApp {
 
     private showProgress(status: JobStatus): void {
         const elements = this.ensureElements();
-        const label = status.total
+        this.setBusy(true, status.total
             ? `Cleaning… (${status.done ?? 0}/${status.total})`
-            : "Cleaning…";
+            : "Cleaning…");
+        // const label = status.total
+        //     ? `Cleaning… (${status.done ?? 0}/${status.total})`
+        //     : "Cleaning…";
         elements.status.dataset.state = "pending";
-        elements.status.textContent = label;
+        // elements.status.textContent = label;
     }
 
     private setBusy(isBusy: boolean, message?: string): void {

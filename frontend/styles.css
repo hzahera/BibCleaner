@@ -63,6 +63,7 @@ button:disabled {
 
 .app-header {
     padding: 0.75rem 0.25rem 0.25rem;
+    overflow: hidden;
 }
 
 .app-header h1 {
@@ -71,6 +72,12 @@ button:disabled {
     line-height: 1;
     letter-spacing: -0.04em;
     color: #0f172a;
+}
+
+.app-header img {
+    width: 500px;
+    width: 600px;
+    margin: -30px 0 -50px -25px;
 }
 
 .status-message {

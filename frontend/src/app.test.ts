@@ -1,5 +1,6 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { BibCleanerApp } from "./app";
+import logoUrl from "../logo.png";
 import {
     createBibUploadFile,
     createDownloadBlob,
@@ -142,7 +143,10 @@ describe("BibCleaner frontend app", () => {
         const app = new BibCleanerApp({ document, fetchImpl: vi.fn(), apiBase: "/api" });
         const root = app.mount(document.getElementById("app") as HTMLElement);
 
-        expect(root.querySelector("header h1")?.textContent).toBe("BibCleaner");
+        const logo = root.querySelector("header img");
+        expect(logo).toBeTruthy();
+        expect(logo?.getAttribute("alt")).toBe("BibCleaner Logo");
+        expect(logo?.getAttribute("src")).toBe(logoUrl);
         expect(root.querySelectorAll(".panel")).toHaveLength(2);
         expect(root.querySelector("[data-action='upload']")).toBeTruthy();
         expect(root.querySelector("[data-action='clean']")).toBeTruthy();
@@ -369,5 +373,100 @@ describe("BibCleaner frontend app", () => {
         createObjectUrlMock.mockRestore();
         revokeObjectUrlMock.mockRestore();
         createElementSpy.mockRestore();
+    });
+
+    it("does not time out while the job keeps progressing", async () => {
+        vi.useFakeTimers();
+        const statuses: Array<{ status: string; done: number; total: number }> = [
+            { status: "processing", done: 0, total: 4 },
+            { status: "processing", done: 1, total: 4 },
+            { status: "processing", done: 2, total: 4 },
+            { status: "processing", done: 3, total: 4 },
+            { status: "done", done: 4, total: 4 },
+        ];
+        let pollCount = 0;
+        const fetchMock = vi.fn().mockImplementation((url: string, init?: RequestInit) => {
+            if (url === "/api/jobs" && init?.method === "POST") {
+                return Promise.resolve(jsonResponse({ job_id: "j1" }, { status: 202 }));
+            }
+            if (url === "/api/jobs/j1") {
+                const index = Math.min(pollCount, statuses.length - 1);
+                pollCount += 1;
+                return Promise.resolve(jsonResponse(statuses[index]));
+            }
+            if (url === "/api/jobs/j1/result") {
+                return Promise.resolve(textResponse("@article{demo,title={Cleaned}}\n"));
+            }
+            if (url === "/api/validation") {
+                return Promise.resolve(createJsonResponse([]));
+            }
+            throw new Error(`unexpected request: ${url}`);
+        });
+
+        const app = new BibCleanerApp({
+            document,
+            fetchImpl: fetchMock,
+            apiBase: "/api",
+            pollIntervalMs: 20,
+            pollTimeoutMs: 50,
+        });
+
+        app.mount(document.getElementById("app") as HTMLElement);
+        (document.querySelector("[data-role='input-textarea']") as HTMLTextAreaElement).value =
+            "@article{demo,title={Input}}";
+
+        const pending = app.submitCurrentContent();
+        await Promise.resolve();
+
+        for (let i = 0; i < 5; i += 1) {
+            await vi.advanceTimersByTimeAsync(20);
+        }
+        await pending;
+
+        expect((document.querySelector(".status-message") as HTMLParagraphElement).dataset.state)
+            .toBe("success");
+        expect((document.querySelector(".status-message") as HTMLParagraphElement).textContent)
+            .toContain("successfully");
+
+        vi.useRealTimers();
+    });
+
+    it("times out when the job remains stalled", async () => {
+        vi.useFakeTimers();
+        const fetchMock = vi.fn().mockImplementation((url: string, init?: RequestInit) => {
+            if (url === "/api/jobs" && init?.method === "POST") {
+                return Promise.resolve(jsonResponse({ job_id: "j1" }, { status: 202 }));
+            }
+            if (url === "/api/jobs/j1") {
+                return Promise.resolve(jsonResponse({ status: "processing", done: 0, total: 10 }));
+            }
+            throw new Error(`unexpected request: ${url}`);
+        });
+
+        const app = new BibCleanerApp({
+            document,
+            fetchImpl: fetchMock,
+            apiBase: "/api",
+            pollIntervalMs: 20,
+            pollTimeoutMs: 60,
+        });
+
+        app.mount(document.getElementById("app") as HTMLElement);
+        (document.querySelector("[data-role='input-textarea']") as HTMLTextAreaElement).value =
+            "@article{demo,title={Input}}";
+
+        const pending = app.submitCurrentContent();
+        await Promise.resolve();
+
+        for (let i = 0; i < 6; i += 1) {
+            await vi.advanceTimersByTimeAsync(20);
+        }
+        await pending;
+
+        const status = document.querySelector(".status-message") as HTMLParagraphElement;
+        expect(status.dataset.state).toBe("error");
+        expect(status.textContent).toContain("Timed out waiting for job progress");
+
+        vi.useRealTimers();
     });
 });
