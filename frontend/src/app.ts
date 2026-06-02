@@ -1,6 +1,6 @@
 import {
-    API_ENDPOINT,
     VALIDATION_ENDPOINT,
+    API_BASE,
     DEFAULT_DOWNLOAD_FILENAME,
     DEFAULT_INPUT_FILENAME,
     createBibUploadFile,
@@ -11,6 +11,7 @@ import {
     responseErrorMessage,
     normalizeBibText,
 } from "./helpers";
+import logoUrl from "../logo.png";
 
 type FetchLike = typeof fetch;
 
@@ -18,6 +19,13 @@ interface ValidationResult {
     entry_id: string;
     errors: string[];
     warnings: string[];
+}
+
+interface JobStatus {
+    status: string; // queued | processing | done | error
+    done?: number;
+    total?: number;
+    error?: string;
 }
 
 interface AppElements {
@@ -40,23 +48,35 @@ interface AppElements {
 export interface BibCleanerAppOptions {
     document?: Document;
     fetchImpl?: FetchLike;
-    apiEndpoint?: string;
     validationEndpoint?: string;
+    apiBase?: string;
+    pollIntervalMs?: number;
+    pollTimeoutMs?: number;
+}
+
+interface JobProgressSnapshot {
+    status: string;
+    done: number | null;
+    total: number | null;
 }
 
 export class BibCleanerApp {
     private readonly document: Document;
     private readonly fetchImpl: FetchLike;
-    private readonly apiEndpoint: string;
     private readonly validationEndpoint: string;
+    private readonly apiBase: string;
+    private readonly pollIntervalMs: number;
+    private readonly pollTimeoutMs: number;
     private elements: AppElements | null = null;
     private currentDownloadFilename = DEFAULT_DOWNLOAD_FILENAME;
 
     constructor(options: BibCleanerAppOptions = {}) {
         this.document = options.document ?? document;
         this.fetchImpl = options.fetchImpl ?? fetch.bind(globalThis);
-        this.apiEndpoint = options.apiEndpoint ?? API_ENDPOINT;
         this.validationEndpoint = options.validationEndpoint ?? VALIDATION_ENDPOINT;
+        this.apiBase = (options.apiBase ?? API_BASE).replace(/\/+$/u, "");
+        this.pollIntervalMs = options.pollIntervalMs ?? 1000;
+        this.pollTimeoutMs = options.pollTimeoutMs ?? 300000;
     }
 
     mount(container: HTMLElement): HTMLElement {
@@ -64,13 +84,13 @@ export class BibCleanerApp {
         root.className = "app-shell";
         root.innerHTML = `
       <header class="app-header">
-        <h1>BibCleaner</h1>
+                <img src="${logoUrl}" alt="BibCleaner Logo"/>
       </header>
       <p class="status-message" role="alert" aria-live="polite"></p>
       <main class="app-main">
         <section class="panel panel--input" aria-label="Input bibliography">
           <div class="panel__toolbar">
-            <label for="bib-input">Please, write or upload you .bib file</label>
+            <label for="bib-input">Please, write or upload your .bib file</label>
             <div class="panel__actions">
               <button type="button" class="button--secondary" data-action="upload">Upload</button>
               <input class="visually-hidden" type="file" accept=".bib" data-role="file-input" />
@@ -208,23 +228,40 @@ export class BibCleanerApp {
         const formData = new FormData();
         formData.append("file", bibFile);
 
-        this.setBusy(true, "Processing bibliography...");
+        this.setBusy(true, "Submitting bibliography for cleaning...");
         this.clearStatus();
         this.renderValidationResults([]);
 
         try {
-            const response = await this.fetchImpl(this.apiEndpoint, {
+            // 1. Submit the upload as a background job.
+            const createResponse = await this.fetchImpl(`${this.apiBase}/jobs`, {
                 method: "POST",
                 body: formData,
             });
-
-            if (!response.ok) {
-                throw new Error(await responseErrorMessage(response));
+            if (!createResponse.ok) {
+                throw new Error(await responseErrorMessage(createResponse));
+            }
+            const created = (await createResponse.json()) as { job_id?: string };
+            if (!created.job_id) {
+                throw new Error("Unexpected response from server (no job id).");
             }
 
-            const cleaned = normalizeBibText(await response.text());
+            // 2. Poll until the job finishes.
+            const final = await this.pollJob(created.job_id);
+            if (final.status === "error") {
+                throw new Error(final.error || "Processing failed.");
+            }
+
+            // 3. Download the cleaned result.
+            const resultResponse = await this.fetchImpl(
+                `${this.apiBase}/jobs/${created.job_id}/result`,
+            );
+            if (!resultResponse.ok) {
+                throw new Error(await responseErrorMessage(resultResponse));
+            }
+            const cleaned = normalizeBibText(await resultResponse.text());
             const responseFilename = parseFilenameFromContentDisposition(
-                response.headers.get("content-disposition"),
+                resultResponse.headers.get("content-disposition"),
             );
 
             elements.outputTextArea.value = cleaned;
@@ -271,12 +308,86 @@ export class BibCleanerApp {
         return payload as ValidationResult[];
     }
 
-    private setBusy(isBusy: boolean, message = "Processing..."): void {
+    private async pollJob(jobId: string): Promise<JobStatus> {
+        let lastProgress = this.createProgressSnapshot({ status: "queued" });
+        let lastActivityAt = Date.now();
+
+        for (; ;) {
+            const response = await this.fetchImpl(`${this.apiBase}/jobs/${jobId}`);
+            if (!response.ok) {
+                throw new Error(await responseErrorMessage(response));
+            }
+
+            const status = (await response.json()) as JobStatus;
+            if (status.status === "done" || status.status === "error") {
+                return status;
+            }
+
+            this.showProgress(status);
+
+            const currentProgress = this.createProgressSnapshot(status);
+            if (this.hasProgressChanged(lastProgress, currentProgress)) {
+                lastProgress = currentProgress;
+                lastActivityAt = Date.now();
+            }
+
+            if (Date.now() - lastActivityAt >= this.pollTimeoutMs) {
+                throw new Error(
+                    "Timed out waiting for job progress. The server appears stalled.",
+                );
+            }
+
+            await this.delay(this.pollIntervalMs);
+        }
+    }
+
+    private createProgressSnapshot(status: JobStatus): JobProgressSnapshot {
+        return {
+            status: status.status,
+            done: typeof status.done === "number" ? status.done : null,
+            total: typeof status.total === "number" ? status.total : null,
+        };
+    }
+
+    private hasProgressChanged(
+        previous: JobProgressSnapshot,
+        next: JobProgressSnapshot,
+    ): boolean {
+        if (previous.status !== next.status) {
+            return true;
+        }
+
+        if (previous.done !== next.done) {
+            return true;
+        }
+
+        return previous.total !== next.total;
+    }
+
+    private delay(ms: number): Promise<void> {
+        return new Promise((resolve) => setTimeout(resolve, ms));
+    }
+
+    private showProgress(status: JobStatus): void {
+        const elements = this.ensureElements();
+        this.setBusy(true, status.total
+            ? `Cleaning… (${status.done ?? 0}/${status.total})`
+            : "Cleaning…");
+        // const label = status.total
+        //     ? `Cleaning… (${status.done ?? 0}/${status.total})`
+        //     : "Cleaning…";
+        elements.status.dataset.state = "pending";
+        // elements.status.textContent = label;
+    }
+
+    private setBusy(isBusy: boolean, message?: string): void {
         const elements = this.ensureElements();
         elements.uploadButton.disabled = isBusy;
         elements.cleanButton.disabled = isBusy;
         elements.downloadButton.disabled = isBusy;
-        elements.processingIndicatorText.textContent = message;
+        if (message) {
+            elements.processingIndicatorText.textContent = message;
+        }
         elements.processingIndicator.hidden = !isBusy;
     }
 

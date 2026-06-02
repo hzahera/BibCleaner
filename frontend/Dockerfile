@@ -5,7 +5,7 @@ WORKDIR /app
 COPY package.json package-lock.json* ./
 RUN npm install
 
-COPY index.html styles.css vite.config.ts vitest.config.ts tsconfig.json ./
+COPY index.html styles.css vite.config.ts vitest.config.ts tsconfig.json logo.png ./
 COPY src ./src
 
 RUN npm run build

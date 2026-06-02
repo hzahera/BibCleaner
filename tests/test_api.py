@@ -1,181 +1,155 @@
+"""API tests using FastAPI's synchronous TestClient."""
+
+import time
+
 import pytest
-from httpx2 import ASGITransport, AsyncClient
+from fastapi.testclient import TestClient
 
-from bibcleaner.web_api import app
+from bibcleaner.web_api import app, _jobs, _jobs_lock, _limiter
 
+client = TestClient(app)
 
-@pytest.mark.anyio
-async def test_health_returns_expected_metadata():
-    async with AsyncClient(
-        transport=ASGITransport(app=app), base_url="http://test"
-    ) as client:
-        response = await client.get("/health")
-
-    assert response.status_code == 200
-    payload = response.json()
-    assert payload["status"] == "healthy"
-    assert "service" in payload
-    assert "version" in payload
+SAMPLE_BIB = b"""@article{demo,
+  title = {Attention Is All You Need},
+  author = {Vaswani, Ashish and others},
+  journal = {arXiv preprint arXiv:1706.03762},
+  year = {2017}
+}
+"""
 
 
-@pytest.mark.anyio
-async def test_clear_bib_missing_file_returns_400():
-    async with AsyncClient(
-        transport=ASGITransport(app=app), base_url="http://test"
-    ) as client:
-        response = await client.post("/clear-bib")
+@pytest.fixture(autouse=True)
+def reset_api_state():
+    with _jobs_lock:
+        _jobs.clear()
+    with _limiter._lock:
+        _limiter._hits.clear()
+    yield
+    with _jobs_lock:
+        _jobs.clear()
+    with _limiter._lock:
+        _limiter._hits.clear()
 
-    assert response.status_code == 400
-    assert "Missing file upload field" in response.json()["detail"]
+
+def _wait_for_job(job_id: str, timeout: float = 5.0) -> dict:
+    deadline = time.time() + timeout
+    while time.time() < deadline:
+        response = client.get(f"/jobs/{job_id}")
+        assert response.status_code == 200
+        payload = response.json()
+        if payload["status"] in {"done", "error"}:
+            return payload
+        time.sleep(0.01)
+    raise AssertionError("job did not finish in time")
 
 
-@pytest.mark.anyio
-async def test_clear_bib_valid_upload_returns_bib_attachment(monkeypatch):
-    async with AsyncClient(
-        transport=ASGITransport(app=app), base_url="http://test"
-    ) as client:
-
-        def fake_process(content):
-            assert isinstance(content, bytes)
-            return "@article{demo,title={Cleaned}}\n"
-
-        monkeypatch.setattr(
-            "bibcleaner.web_api.process_bibliography_content", fake_process
-        )
-
-        response = await client.post(
-            "/clear-bib",
-            files={
-                "file": (
-                    "refs.bib",
-                    b"@article{demo,title={A}}",
-                    "application/x-bibtex",
-                )
-            },
-        )
+def test_health_reports_service_info_and_active_jobs():
+    response = client.get("/health")
 
     assert response.status_code == 200
-    assert response.headers["content-type"].startswith("text/x-bibtex")
-    assert (
-        'attachment; filename="cleaned_refs.bib"'
-        == response.headers["content-disposition"]
+    assert response.json()["status"] == "healthy"
+    assert response.json()["service"] == "BibCleaner API"
+    assert response.json()["active_jobs"] == 0
+
+
+def test_job_flow_uses_uploaded_text_and_returns_cleaned_result(monkeypatch):
+    seen = {}
+
+    def fake_process(content, **options):
+        seen["content"] = content
+        seen["options"] = options
+        progress = options["progress"]
+        progress(1, 1)
+        return "@article{demo,title={Cleaned}}\n"
+
+    monkeypatch.setattr("bibcleaner.web_api.process_bibliography_content", fake_process)
+
+    response = client.post(
+        "/jobs",
+        files={"file": ("refs.bib", SAMPLE_BIB, "application/x-bibtex")},
+        data={"enrich": "false", "dedup": "true", "protect_caps": "false"},
     )
-    assert "@article" in response.text
+
+    assert response.status_code == 202
+    job_id = response.json()["job_id"]
+
+    status = _wait_for_job(job_id)
+    assert status["status"] == "done"
+    assert status["filename"] == "cleaned_refs.bib"
+    assert seen["content"] == SAMPLE_BIB.decode("utf-8")
+    assert seen["options"]["enrich"] is False
+    assert seen["options"]["dedup"] is True
+    assert seen["options"]["protect_caps"] is False
+
+    result = client.get(f"/jobs/{job_id}/result")
+    assert result.status_code == 200
+    assert result.text == "@article{demo,title={Cleaned}}\n"
+    assert result.headers["content-disposition"] == 'attachment; filename="cleaned_refs.bib"'
+    assert result.headers["content-type"].startswith("text/x-bibtex")
 
 
-@pytest.mark.anyio
-async def test_validation_valid_upload_returns_results(monkeypatch):
-    async with AsyncClient(
-        transport=ASGITransport(app=app), base_url="http://test"
-    ) as client:
+def test_clean_bib_alias_returns_cleaned_response(monkeypatch):
+    seen = {}
 
-        def fake_validate(content):
-            assert isinstance(content, bytes)
-            return [
-                {
-                    "entry_id": "demo",
-                    "errors": ["author"],
-                    "warnings": ["doi"],
-                }
-            ]
+    def fake_process(content, **options):
+        seen["content"] = content
+        seen["options"] = options
+        return "@article{demo,title={Sync Cleaned}}\n"
 
-        monkeypatch.setattr(
-            "bibcleaner.web_api.validate_bibliography_content", fake_validate
-        )
+    monkeypatch.setattr("bibcleaner.web_api.process_bibliography_content", fake_process)
 
-        response = await client.post(
-            "/validation",
-            files={
-                "file": (
-                    "refs.bib",
-                    b"@article{demo,title={A}}",
-                    "application/x-bibtex",
-                )
-            },
-        )
+    response = client.post(
+        "/clear-bib",
+        files={"file": ("refs.bib", SAMPLE_BIB, "application/x-bibtex")},
+    )
 
     assert response.status_code == 200
-    assert response.json() == [
-        {
-            "entry_id": "demo",
-            "errors": ["author"],
-            "warnings": ["doi"],
-        }
-    ]
+    assert response.text == "@article{demo,title={Sync Cleaned}}\n"
+    assert response.headers["content-disposition"] == 'attachment; filename="cleaned_refs.bib"'
+    assert response.headers["content-type"].startswith("text/x-bibtex")
+    assert seen["content"] == SAMPLE_BIB.decode("utf-8")
+    assert seen["options"] == {}
 
 
-@pytest.mark.anyio
-async def test_validation_rejects_non_bib_upload():
-    async with AsyncClient(
-        transport=ASGITransport(app=app), base_url="http://test"
-    ) as client:
-        response = await client.post(
-            "/validation",
-            files={
-                "file": (
-                    "refs.txt",
-                    b"not bibtex",
-                    "application/x-bibtex",
-                )
-            },
-        )
+def test_validation_passes_bytes_and_returns_json(monkeypatch):
+    seen = {}
+
+    def fake_validate(content):
+        seen["content"] = content
+        return [{"entry_id": "demo", "errors": ["author"], "warnings": ["doi"]}]
+
+    monkeypatch.setattr("bibcleaner.web_api.validate_bibliography_content", fake_validate)
+
+    response = client.post(
+        "/validation",
+        files={"file": ("refs.bib", SAMPLE_BIB, "application/x-bibtex")},
+    )
+
+    assert response.status_code == 200
+    assert response.json() == [{"entry_id": "demo", "errors": ["author"], "warnings": ["doi"]}]
+    assert seen["content"] == SAMPLE_BIB
+
+
+def test_jobs_reject_non_bib_uploads():
+    response = client.post(
+        "/jobs",
+        files={"file": ("notes.txt", b"@article{demo}", "text/plain")},
+    )
 
     assert response.status_code == 400
     assert response.json()["detail"] == "Only .bib files are accepted"
 
 
-@pytest.mark.anyio
-async def test_validation_unknown_entry_type_emits_warning():
-    bib = b"@weirdType{demo,title={A Demo Entry}}"
+def test_clean_bib_rejects_missing_entries():
+    response = client.post(
+        "/clean-bib",
+        files={"file": ("refs.bib", b"plain text only", "application/x-bibtex")},
+    )
 
-    async with AsyncClient(
-        transport=ASGITransport(app=app), base_url="http://test"
-    ) as client:
-        response = await client.post(
-            "/validation",
-            files={
-                "file": (
-                    "refs.bib",
-                    bib,
-                    "application/x-bibtex",
-                )
-            },
-        )
-
-    assert response.status_code == 200
-    assert response.json() == [
-        {
-            "entry_id": "demo",
-            "errors": [],
-            "warnings": ["unknown entry type: weirdtype"],
-        }
-    ]
+    assert response.status_code == 422
+    assert response.json()["detail"] == "No BibTeX entries found"
 
 
-@pytest.mark.anyio
-async def test_validation_known_type_reports_missing_required_and_optional_fields():
-    # Only title is present; article requires author, title, journal, year.
-    bib = b"@article{demo,title={A Demo Entry}}"
-
-    async with AsyncClient(
-        transport=ASGITransport(app=app), base_url="http://test"
-    ) as client:
-        response = await client.post(
-            "/validation",
-            files={
-                "file": (
-                    "refs.bib",
-                    bib,
-                    "application/x-bibtex",
-                )
-            },
-        )
-
-    assert response.status_code == 200
-    assert response.json() == [
-        {
-            "entry_id": "demo",
-            "errors": ["author", "journal", "year"],
-            "warnings": ["volume", "number", "pages", "month", "doi", "url"],
-        }
-    ]
+def test_unknown_job_endpoints_return_404():
+    assert client.get("/jobs/missing").status_code == 404
+    assert client.get("/jobs/missing/result").status_code == 404

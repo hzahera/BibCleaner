@@ -1,31 +1,51 @@
 [build-system]
-requires = ["setuptools>=61.0"]
+requires = ["setuptools>=77.0"]
 build-backend = "setuptools.build_meta"
 
 [project]
-name = "bib-cleaner"
-version = "0.1.0"
+name = "bib-cleaner-tool"
+version = "0.1.14"
 authors = [
-  { name="Hamada Zahera" }
+  { name = "Hamada Zahera" },
+  { name = "Italo Lopes" },
 ]
-description = "Python toolkit for automated BibTeX metadata enrichment using Semantic Scholar API"
+description = "Automated BibTeX cleaning: replace arXiv preprints with published venues, normalize venue names, and tidy entries for LaTeX."
 readme = "README.md"
 requires-python = ">=3.10"
+license = "MIT"
+license-files = ["LICENSE"]
+keywords = ["bibtex", "bibliography", "latex", "arxiv", "references", "citations", "dblp", "crossref"]
 classifiers = [
     "Programming Language :: Python :: 3",
-    "License :: OSI Approved :: MIT License",
     "Operating System :: OS Independent",
+    "Topic :: Text Processing :: Markup :: LaTeX",
+    "Topic :: Scientific/Engineering",
+    "Intended Audience :: Science/Research",
 ]
+
 dependencies = [
     "requests>=2.25.0",
     "bibtexparser==2.0.0b9",
     "tqdm>=4.65.0",
-    "fastapi>=0.116.0",
-    "uvicorn[standard]>=0.35.0",
-    "python-multipart>=0.0.20"
 ]
 
+[project.optional-dependencies]
+# Web service (FastAPI app). CLI users don't need this:
+#   pip install bib-cleaner-tool          # CLI only
+#   pip install "bib-cleaner-tool[web]"   # + HTTP API
+web = [
+    "fastapi",
+    "uvicorn",
+    "python-multipart",  # required by FastAPI for file uploads — do not remove
+]
+
+[project.urls]
+Homepage = "https://github.com/hzahera/bib-cleaner"
+Repository = "https://github.com/hzahera/bib-cleaner"
+Issues = "https://github.com/hzahera/bib-cleaner/issues"
+
 [project.scripts]
+bib-cleaner-tool = "bibcleaner.cli:main"
 bibcleaner = "bibcleaner.cli:main"
 
 [dependency-groups]
@@ -35,5 +55,5 @@ dev = [
     "ruff>=0.15.14",
 ]
 
-[tool.setuptools]
-packages = ["bibcleaner", "providers"]
+[tool.setuptools.packages.find]
+include = ["bibcleaner*"]

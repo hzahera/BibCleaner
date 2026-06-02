@@ -1,12 +1,21 @@
-# BibCleaner
+<div align="center">
 
-**Developed for researchers, by researchers.**
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="https://raw.githubusercontent.com/hzahera/bib-cleaner/refactor-providers/logo-dark.png">
+  <img src="https://raw.githubusercontent.com/hzahera/bib-cleaner/refactor-providers/logo.png" alt="BibCleaner" width="440">
+</picture>
+
+### A tool that you run before every submission.
 
 **A Python toolkit for automated BibTeX metadata enrichment and venue normalization**
+
+_Developed by researchers, to researchers._
 
 [![Python 3.10+](https://img.shields.io/badge/Python-3.10+-blue.svg)](https://www.python.org/downloads/)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
 [![Code style: black](https://img.shields.io/badge/code%20style-black-000000.svg)](https://github.com/psf/black)
+
+</div>
 
 ---
 
@@ -22,6 +31,7 @@ BibCleaner automatically cleans and enriches BibTeX bibliographies. It detects a
 - Detects arXiv entries from `eprint`, `archiveprefix`, or a `journal = {arXiv preprint arXiv:XXXX}` field
 - Replaces them with the correct `@inproceedings` or `@article` entry including `booktitle`/`journal`, `year`, `pages`, `volume`, and `doi`
 - Entries confirmed as still-unpublished are converted to clean `@misc` preprints with `eprint`, `archiveprefix`, `primaryclass`, and `url` fields
+- **Confidence-gated**: every match carries a confidence score based on how it was found (exact DOI/arXiv-ID = high, fuzzy title search = lower). Low-confidence candidates are **flagged with a `note` for you to verify, not applied** — so a wrong venue is never written silently. Tune the bar with `BIBCLEANER_MIN_CONFIDENCE` (default `0.8`).
 
 **Full author list expansion**
 - Expands truncated lists (`et al.`, `others`) and silently incomplete lists using canonical author data
@@ -33,62 +43,108 @@ BibCleaner automatically cleans and enriches BibTeX bibliographies. It detects a
 
 | Input (any format) | Canonical output |
 |---|---|
-| `NeurIPS` / `NIPS` / `neural inf process syst` | `Advances in Neural Information Processing Systems` |
-| `ICLR` | `International Conference on Learning Representations` |
-| `ICML` | `International Conference on Machine Learning` |
-| `ACL` | `Annual Meeting of the Association for Computational Linguistics` |
-| `TACL` | `Transactions of the Association for Computational Linguistics` |
-| `CVPR` | `IEEE/CVF Conference on Computer Vision and Pattern Recognition` |
+| `NeurIPS` / `NIPS` / `neural inf process syst` | `Advances in Neural Information Processing Systems (NeurIPS)` |
+| `ICLR` | `International Conference on Learning Representations (ICLR)` |
+| `ICML` | `International Conference on Machine Learning (ICML)` |
+| `ACL` | `Annual Meeting of the Association for Computational Linguistics (ACL)` |
+| `TACL` | `Transactions of the Association for Computational Linguistics (TACL)` |
+| `CVPR` | `IEEE/CVF Conference on Computer Vision and Pattern Recognition (CVPR)` |
+
+**LaTeX-friendly cleaning** (all offline — no network needed)
+- **Title capitalization protection** — brace-protects acronyms and inter-capped words so sentence-casing styles can't mangle them: `BERT: ... for ImageNet` → `{BERT}: ... for {ImageNet}`. Ordinary Title-Case words are left for the bib style; already-braced text and math (`$...$`) are untouched.
+- **Duplicate merging** (`--dedup`) — collapses entries that share a DOI, arXiv ID, or title+year. Keeps the richest (published beats preprint), folds in any missing fields, and prints the `old → new` citation-key remap.
+- **Used-citation pruning** (`--keep-cited`) — keeps only entries actually `\cite`d in your `.tex`/`.aux`, and warns about cited keys that have no entry (the dreaded `[?]`). Honours `\nocite{*}`.
+- **Citation-key normalization** (`--normalize-keys`) — rewrites keys to a consistent `surnameYYYYword` form (e.g. `vaswani2017attention`), with deterministic `a`/`b` suffixes on collision. Paired with `--rewrite-tex`, it updates every `\cite{…}` in your `.tex` to match — so you get clean keys *without* breaking references.
 
 ---
 
 ## Data Sources
 
-BibCleaner queries four sources in order, stopping as soon as a published venue is found:
+Each source is a self-contained `Provider` (in the `providers/` package) exposing a uniform `lookup()`. BibCleaner queries them in order, stopping as soon as a published venue is found:
 
 | Priority | Source | Used for |
 |---|---|---|
-| 1 | **arXiv API** | Canonical author names and `primaryclass` for every arXiv entry |
-| 2 | **DBLP** | Published venue lookup — fast, no rate limits, authoritative for CS |
-| 3 | **CrossRef** | Journal and proceedings metadata; covers ACM, IEEE, Springer |
-| 4 | **Semantic Scholar** | Fallback arXiv ID lookup when DBLP and CrossRef find nothing |
-| 5 | **OpenAlex** | Last-resort title search |
+| 1 | **arXiv API** | Canonical author names, `primaryclass`, and the author-declared venue (`journal_ref` / `doi`) |
+| 2 | **DOI lookup** | Exact resolution via CrossRef → OpenAlex when a DOI is known — no fuzzy matching |
+| 3 | **DBLP** | Title search — fast, no rate limits, authoritative for CS |
+| 4 | **CrossRef** | Title search; journal and proceedings metadata (ACM, IEEE, Springer) |
+| 5 | **Semantic Scholar** | Fallback arXiv-ID lookup when DBLP and CrossRef find nothing |
+| 6 | **OpenAlex** | Last-resort title search |
+
+When no published venue is found but the authors have declared one on arXiv (`journal_ref`), BibCleaner uses it — but only if it maps to a known canonical venue, so no noisy metadata is ever written.
 
 ---
 
-## Installation (uv)
+## Installation
 
-### 1. Clone the repository
+### Requirements
+
+- **Python 3.10 or newer** — check with `python3 --version`.
+  On macOS the default `python`/`pip` is often an old 2.7/3.7 that **won't work**;
+  use a 3.10+ interpreter (e.g. Homebrew's `python3.11`/`python3.12`) and always
+  install into a **virtual environment**.
+
+### Install (currently on TestPyPI)
+
+While in beta the package is published on **TestPyPI**. Its dependencies live on
+the real PyPI, so you must add `--extra-index-url` so pip can find them:
 
 ```bash
-git clone https://github.com/hzahera/bib-cleaner.git
-cd bib-cleaner
+# 1. Create + activate a Python 3.10+ virtual environment
+python3.11 -m venv ~/bibcleaner-env
+source ~/bibcleaner-env/bin/activate          # Windows: bibcleaner-env\Scripts\activate
+
+# 2. Install (TestPyPI for the package, PyPI for its dependencies)
+python -m pip install --upgrade \
+  -i https://test.pypi.org/simple/ \
+  --extra-index-url https://pypi.org/simple/ \
+  bib-cleaner-tool
+
+# 3. Run it
+bib-cleaner-tool input.bib -o output.bib
 ```
 
-### 2. Install dependencies and create environment
+For the optional web service, install the `[web]` extra instead:
+`... "bib-cleaner-tool[web]"`.
+
+The CLI is available as either **`bib-cleaner-tool`** or the short alias
+**`bibcleaner`** — they're identical. If a command isn't found on your `PATH`,
+you can always run it via the module: `python -m bibcleaner.cli ...`.
+
+> Once released on the main PyPI this simplifies to `pip install bib-cleaner-tool`
+> (no `--extra-index-url` needed).
+
+### From source (uv)
 
 ```bash
-uv sync
-```
+git clone https://github.com/hzahera/BibCleaner.git
+cd BibCleaner
 
-### 3. Run commands with uv
+uv sync                 # CLI + library
+uv sync --extra web     # + web service (FastAPI / uvicorn)
 
-```bash
-uv run bibcleaner input.bib -o output.bib
-uv run uvicorn bibcleaner.web_api:app --reload
+uv run bib-cleaner-tool input.bib -o output.bib
+uv run uvicorn bibcleaner.web_api:app --reload   # needs --extra web
 uv run pytest
 ```
 
-### Optional: pip workflow
-
-If you prefer pip/venv, the existing workflow still works:
+### From source (pip / venv)
 
 ```bash
-python3 -m venv venv
+python3.11 -m venv venv
 source venv/bin/activate
-pip install -r requirements.txt
-pip install -e .
+python -m pip install -e ".[web]"   # or `-e .` for CLI only
 ```
+
+### Troubleshooting (local setup)
+
+| Symptom | Cause & fix |
+|---|---|
+| `No matching distribution found for bibtexparser==2.0.0b9`, or `Ignored … versions that require a different python` | You're on Python < 3.10. Create the venv with `python3.11 -m venv …` and install inside it. |
+| `pip: bad interpreter: … 2.7 …` | Your system `pip` shim points at a deleted Python. Never call bare `pip`; use `python -m pip` inside an activated venv. |
+| `PackageNotFoundError: No package metadata was found for bibcleaner` when running the command | A stale console script from an old install is shadowing the venv. Run `python -m bibcleaner.cli --help` to confirm the package works, then `hash -r`; if needed delete the stale script (e.g. `/Library/Frameworks/Python.framework/Versions/3.7/bin/bibcleaner`). |
+| `No Semantic Scholar API key found. Request failed.` | Old version (< 0.1.5). Upgrade: `python -m pip install --upgrade --force-reinstall --no-cache-dir -i https://test.pypi.org/simple/ --extra-index-url https://pypi.org/simple/ bib-cleaner-tool`. |
+| Check which version is actually running | `python -c "import bibcleaner; print(bibcleaner.__version__)"` |
 
 ---
 
@@ -101,6 +157,37 @@ uv run bibcleaner input.bib -o output.bib
 ```
 
 If `-o` is omitted the enriched file is saved as `enriched_<input>.bib` in the same directory.
+
+**Options**
+
+| Flag | Effect |
+|---|---|
+| `-o`, `--output FILE` | Output path (default `enriched_<input>.bib`) |
+| `--no-enrich` | Skip online lookups; only clean, format, and normalize (fully offline) |
+| `--no-protect-caps` | Disable title capitalization brace-protection |
+| `--dedup` | Merge duplicate entries and print the citation-key remapping |
+| `--keep-cited FILE ...` | Keep only entries cited in the given `.tex`/`.aux` file(s) |
+| `--normalize-keys` | Rewrite citation keys to a consistent `surnameYYYYword` form |
+| `--rewrite-tex FILE ...` | Apply the key remap (from `--dedup`/`--normalize-keys`) to these `.tex` files in place |
+
+```bash
+# Offline tidy: dedup, prune to what the paper cites, protect capitalization
+uv run bibcleaner refs.bib -o refs_clean.bib --no-enrich --dedup --keep-cited paper.tex paper.aux
+
+# Normalize keys (vaswani2017attention) and update every \cite in the .tex to match
+uv run bibcleaner refs.bib -o refs_clean.bib --normalize-keys --rewrite-tex paper.tex
+```
+
+### Recommended pre-submission run
+
+The one command to run before you hit submit — enrich preprints, merge
+duplicates, give every entry a clean key, and update your `.tex` to match:
+
+```bash
+bibcleaner refs.bib -o refs.bib --dedup --normalize-keys --rewrite-tex main.tex
+```
+
+> `--rewrite-tex` edits your `.tex` files in place — commit or back up first.
 
 ### Python module
 
@@ -127,21 +214,45 @@ Start the API locally:
 uv run uvicorn bibcleaner.web_api:app --host 0.0.0.0 --port 8000 --reload
 ```
 
-Health check:
+Because enrichment is rate-limited and can take a while, uploads are processed
+as **background jobs** — submit, poll, then download:
+
+| Method & path | Purpose |
+|---|---|
+| `GET /health` | Liveness + active-job count |
+| `POST /jobs` | Upload a `.bib` (`file=@...`); returns `{ "job_id": ... }`. Optional form fields: `enrich`, `dedup`, `protect_caps` |
+| `GET /jobs/{id}` | Job status: `queued` / `processing` / `done` / `error`, with `done`/`total` progress |
+| `GET /jobs/{id}/result` | The cleaned `.bib` once status is `done` |
+| `POST /clean-bib` | Synchronous convenience endpoint for small uploads (alias `/clear-bib`) |
 
 ```bash
-curl http://localhost:8000/health
+# Submit
+JOB=$(curl -s -X POST http://localhost:8000/jobs -F "file=@references.bib" | jq -r .job_id)
+# Poll
+curl -s http://localhost:8000/jobs/$JOB
+# Download when done
+curl -s http://localhost:8000/jobs/$JOB/result -o cleaned_references.bib
 ```
 
-Clean a bibliography upload:
+**Configuration** (environment variables):
 
-```bash
-curl -X POST http://localhost:8000/clear-bib \
-  -F "file=@references.bib" \
-  -o cleaned_references.bib
-```
+| Variable | Default | Effect |
+|---|---|---|
+| `ALLOWED_ORIGINS` | `*` | Comma-separated CORS origins (set to your frontend URL in prod) |
+| `BIBCLEANER_MAX_ENTRIES` | `500` | Reject uploads with more entries |
+| `BIBCLEANER_MAX_BYTES` | `10485760` | Max upload size |
+| `BIBCLEANER_RATE_LIMIT` | `30` | Requests per minute per IP |
+| `BIBCLEANER_WORKERS` | `2` | Concurrent processing jobs |
+| `BIBCLEANER_JOB_TTL` | `3600` | Seconds a finished job (and its result) is kept |
+| `BIBCLEANER_CACHE_TTL` | `86400` | Lookup-cache lifetime (repeat arXiv IDs/DOIs are served instantly) |
+| `CROSSREF_MAILTO`, `S2_API_KEY` | — | Polite-pool email / API key for upstream sources |
 
-The route `/clean-bib` is also available as an alias.
+### Deploy to Render
+
+A [`render.yaml`](render.yaml) blueprint is included. Push to GitHub, create a
+new **Blueprint** in Render pointing at the repo, then set `CROSSREF_MAILTO`
+(and optionally `S2_API_KEY`) in the dashboard. The Dockerfile honours Render's
+`$PORT`, and `/health` is wired as the health check.
 
 ### Frontend with Docker Compose
 
@@ -164,21 +275,24 @@ docker compose up --build
 
 ## Example
 
+These are **real outputs** from the tool (Self-Refine → NeurIPS via DOI; BERT → NAACL via Semantic Scholar):
+
 **Input**
 
 ```bibtex
-@article{madaan2023selfrefine,
+@article{selfrefine,
   title   = {Self-Refine: Iterative Refinement with Self-Feedback},
   author  = {Madaan, Aman and Tandon, Niket and others},
   journal = {arXiv preprint arXiv:2303.17651},
   year    = {2023}
 }
 
-@article{llmbar2024,
-  title   = {RouterBench: A Benchmark for Multi-LLM Routing Systems},
-  author  = {Hu, Qitian Jason and Bieker, Jacob and Li, Xiuyu},
-  journal = {arXiv preprint arXiv:2403.12031},
-  year    = {2024}
+@misc{bert,
+  title         = {BERT: Pre-training of Deep Bidirectional Transformers for Language Understanding},
+  author        = {Devlin, Jacob and Chang, Ming-Wei and Lee, Kenton and Toutanova, Kristina},
+  eprint        = {1810.04805},
+  archiveprefix = {arXiv},
+  year          = {2018}
 }
 
 @inproceedings{existing,
@@ -192,67 +306,69 @@ docker compose up --build
 **Output**
 
 ```bibtex
-@inproceedings{madaan2023selfrefine,
-  title     = {Self-Refine: Iterative Refinement with Self-Feedback},
-  author    = {Aman Madaan and Niket Tandon and Prakhar Gupta and ...},
-  booktitle = {Advances in Neural Information Processing Systems},
-  year      = {2023}
+@inproceedings{selfrefine,
+  title     = {{Self-Refine}: Iterative Refinement with {Self-Feedback}},
+  author    = {Aman Madaan and Niket Tandon and Prakhar Gupta and ... and Peter Clark},  % full 16-author list
+  year      = {2023},
+  booktitle = {Advances in Neural Information Processing Systems (NeurIPS)},
+  doi       = {10.52202/075280-2019},
+  pages     = {46534--46594}
 }
 
-@misc{llmbar2024,
-  title         = {RouterBench: A Benchmark for Multi-LLM Routing Systems},
-  author        = {Qitian Jason Hu and Jacob Bieker and Xiuyu Li and Nan Jiang and ...},
-  year          = {2024},
-  eprint        = {2403.12031},
-  archiveprefix = {arXiv},
-  primaryclass  = {cs.LG},
-  url           = {https://arxiv.org/abs/2403.12031}
+@inproceedings{bert,
+  title     = {{BERT}: Pre-training of Deep Bidirectional Transformers for Language Understanding},
+  author    = {Devlin, Jacob and Chang, Ming-Wei and Lee, Kenton and Toutanova, Kristina},
+  year      = {2019},
+  booktitle = {Annual Conference of the North American Chapter of the Association for Computational Linguistics (NAACL)},
+  doi       = {10.18653/v1/N19-1423}
 }
 
 @inproceedings{existing,
   title     = {Attention Is All You Need},
   author    = {Vaswani, Ashish and others},
-  booktitle = {Advances in Neural Information Processing Systems},
+  booktitle = {Advances in Neural Information Processing Systems (NeurIPS)},
   year      = {2017}
 }
 ```
+
+The first two arXiv preprints were replaced with their published venue (full authors, DOI, pages); the third was already published, so only its `booktitle` was normalized to the canonical form. Preprints with **no** confirmed published version are left as clean `@misc` entries rather than guessed.
 
 The third entry was never an arXiv preprint — BibCleaner normalized its `booktitle` from `NeurIPS` to the canonical full name automatically.
 
 ---
 
-## Optional API keys
+## API keys & rate limits
 
-All data sources work without a key. Keys unlock higher rate limits for large bibliographies.
+BibCleaner works with **no keys at all**, but the public APIs throttle anonymous
+traffic. For anything beyond a handful of entries we **strongly recommend
+getting a free Semantic Scholar key** — it's the difference between full
+coverage and Semantic Scholar being skipped under load.
 
-| Variable | Service | Where to apply |
-|---|---|---|
-| `S2_API_KEY` | Semantic Scholar | <https://www.semanticscholar.org/product/api#api-key-form> |
-| `CROSSREF_MAILTO` | CrossRef polite pool | Any valid email address |
+| Variable | Service | Recommended? | Get it |
+|---|---|---|---|
+| `S2_API_KEY` | Semantic Scholar | ✅ Yes — free, removes the rate limit | <https://www.semanticscholar.org/product/api> |
+| `CROSSREF_MAILTO` | CrossRef polite pool | Optional — your email enables the faster pool | any valid email |
 
 ```bash
-# macOS / Linux
+# macOS / Linux  (add to ~/.zshrc to make it permanent)
 export S2_API_KEY=your_key_here
 export CROSSREF_MAILTO=you@example.com
 
-# Windows Command Prompt
+# Windows (Command Prompt)
 set S2_API_KEY=your_key_here
 set CROSSREF_MAILTO=you@example.com
 ```
 
+> Keep keys in environment variables only — **never commit them** to the repo.
+
+**How BibCleaner behaves under rate limits** (so a busy run never stalls or fails):
+- **Semantic Scholar** — without a key, it's *skipped immediately* when throttled (it's only a fallback; enrichment continues via arXiv/DBLP/CrossRef/OpenAlex). With `S2_API_KEY`, it retries with back-off.
+- **DBLP** — automatically paced and retried with back-off on `HTTP 429` (honoring `Retry-After`), so transient throttling is handled for you.
+- Repeated lookups (same arXiv ID / DOI / title) are cached for the run, so re-runs and duplicate entries don't re-hit the APIs.
+
 ---
- (file + in-memory processing)
-├── cli.py          Command-line interface
-├── crossref.py     CrossRef title search client
-├── dblp.py         DBLP title search client
-├── enricher.py     Enrichment pipeline logic
-├── openalex.py     OpenAlex title search client
-├── venues.py       Venue name normalization table (~35 venues)
-└── web_api.py      FastAPI service routes (/health, /clear-bib
-│   ├─ Yes →  Step 1: arXiv API  (fetch canonical authors + primaryclass)
-│   │         Step 2: DBLP       (find published venue — one request)
-│   │         Step 3: CrossRef   (title search fallback)
-│  Docker
+
+## Docker
 
 Build and run the API image:
 
@@ -265,18 +381,32 @@ Then test:
 
 ```bash
 curl http://localhost:8000/health
-
 ```
 
 Request example:
 
 ```bash
-curl -X POST http://localhost:8000/clear-bib -F "file=@/path/to/file/file.bib" -o /path/to/output/file/output.bib
+curl -X POST http://localhost:8000/clear-bib \
+  -F "file=@/path/to/references.bib" \
+  -o cleaned_references.bib
 ```
 
-##  │         Step 4: Semantic Scholar (arXiv ID lookup)
-│   │         Step 5: OpenAlex   (last-resort title search)
-│   │         Step 6: If no venue found — normalize as clean @misc preprint
+---
+
+## How it works
+
+```
+For every entry in the .bib file
+│
+├─ Does it contain an arXiv ID?
+│   ├─ Yes →  Step 1: arXiv API  (authors + category + declared journal_ref / doi)
+│   │         Step 2: DOI lookup  (CrossRef → OpenAlex, exact — if a DOI is known)
+│   │         Step 3: DBLP        (title search — published venue, one request)
+│   │         Step 4: CrossRef    (title search)
+│   │         Step 5: Semantic Scholar (arXiv-ID lookup)
+│   │         Step 6: OpenAlex    (last-resort title search)
+│   │         Step 7: journal_ref (author-declared venue, known venues only)
+│   │         else → normalize as clean @misc preprint
 │   │
 │   └─ No  →  Normalize booktitle / journal to canonical full name
 │
@@ -289,16 +419,46 @@ curl -X POST http://localhost:8000/clear-bib -F "file=@/path/to/file/file.bib" -
 
 ```
 bibcleaner/
-├── api.py          Semantic Scholar arXiv ID client
-├── arxiv_api.py    arXiv Atom API client (canonical authors)
-├── bibcleaner.py   Main orchestration
-├── cli.py          Command-line interface
-├── crossref.py     CrossRef title search client
-├── dblp.py         DBLP title search client
-├── enricher.py     Enrichment pipeline logic
-├── openalex.py     OpenAlex title search client
-└── venues.py       Venue name normalization table (~35 venues)
+├── bibcleaner.py       Orchestration (parse → enrich → write; file + in-memory)
+├── cli.py              Command-line interface
+├── enricher.py         Enrichment pipeline (drives the providers)
+├── venues.py           Venue name normalization table (~40 venues)
+├── latex.py            Title capitalization brace-protection
+├── dedup.py            Duplicate detection + merging
+├── citations.py        .tex/.aux citation parsing, pruning + rewriting
+├── keys.py             Consistent citation-key generation
+├── cache.py            Thread-safe TTL cache for provider lookups
+├── web_api.py          FastAPI service (jobs, rate limiting, CORS)
+└── providers/          One module per data source, uniform Provider interface
+    ├── provider.py         Provider ABC + ProviderQuery / ProviderResult
+    ├── arxiv.py            arXiv Atom API (authors, category, journal_ref, doi)
+    ├── dblp.py             DBLP title search
+    ├── crossref.py         CrossRef DOI + title search
+    ├── semanticscholar.py  Semantic Scholar arXiv-ID lookup
+    └── openalex.py         OpenAlex DOI + title search
+
+frontend/               Vite + TypeScript web UI (submit → poll → download)
 ```
+
+---
+
+## Evaluation
+
+Matching quality is measured against a labeled set of well-known arXiv papers
+with verified published venues ([`eval/dataset.json`](eval/dataset.json)).
+
+```bash
+python eval/evaluate.py                 # live run (set S2_API_KEY for best coverage)
+python eval/evaluate.py --offline        # replay the recorded results, no network
+python eval/evaluate.py --limit 6        # quick subset
+```
+
+It reports **precision** (of the venues it asserted, how many were right),
+**recall** (of published papers, how many it resolved correctly), and accuracy,
+plus a per-paper breakdown with the confidence and source for each match. A live
+run records `eval/results_cache.json` so the metrics can be replayed
+deterministically (handy for CI and regression checks). The seed set is small
+and easy to extend — add entries to `dataset.json` to strengthen the benchmark.
 
 ---
 
