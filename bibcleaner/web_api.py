@@ -14,21 +14,19 @@ event loop.
 
 from __future__ import annotations
 
+import asyncio
 import os
 import re
 import time
 import uuid
 import logging
 import threading
-from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass, field, asdict
 from typing import Optional
 
 from fastapi import FastAPI, File, Form, HTTPException, Request, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse, Response
-from starlette.concurrency import run_in_threadpool
-
 from . import __version__
 from .bibcleaner import process_bibliography_content
 from .validation import validate_bibliography_content
@@ -41,7 +39,6 @@ APP_NAME = "BibCleaner API"
 MAX_UPLOAD_BYTES = int(os.environ.get("BIBCLEANER_MAX_BYTES", 10 * 1024 * 1024))
 MAX_ENTRIES = int(os.environ.get("BIBCLEANER_MAX_ENTRIES", 500))
 RATE_LIMIT = int(os.environ.get("BIBCLEANER_RATE_LIMIT", 30))  # requests / minute / IP
-WORKERS = int(os.environ.get("BIBCLEANER_WORKERS", 2))
 JOB_TTL = float(os.environ.get("BIBCLEANER_JOB_TTL", 3600))  # seconds
 ALLOWED_ORIGINS = [
     o.strip() for o in os.environ.get("ALLOWED_ORIGINS", "*").split(",") if o.strip()
@@ -120,7 +117,6 @@ class Job:
 
 _jobs: dict = {}
 _jobs_lock = threading.Lock()
-_executor = ThreadPoolExecutor(max_workers=WORKERS)
 
 
 def _prune_jobs() -> None:
@@ -130,7 +126,7 @@ def _prune_jobs() -> None:
             _jobs.pop(jid, None)
 
 
-def _run_job(job_id: str, text: str, filename: str, opts: dict) -> None:
+async def _run_job(job_id: str, text: str, filename: str, opts: dict) -> None:
     job = _jobs.get(job_id)
     if job is None:
         return
@@ -140,7 +136,7 @@ def _run_job(job_id: str, text: str, filename: str, opts: dict) -> None:
         job.done, job.total = done, total
 
     try:
-        job.result = process_bibliography_content(text, progress=progress, **opts)
+        job.result = await process_bibliography_content(text, progress=progress, **opts)
         job.filename = filename
         job.status = "done"
     except ValueError as exc:
@@ -231,7 +227,7 @@ async def create_job(
     job = Job(id=uuid.uuid4().hex, filename=f"cleaned_{filename}")
     with _jobs_lock:
         _jobs[job.id] = job
-    _executor.submit(_run_job, job.id, text, job.filename, opts)
+    asyncio.create_task(_run_job(job.id, text, job.filename, opts))
     return {"job_id": job.id, "status": job.status}
 
 
@@ -273,7 +269,7 @@ async def clean_bib_sync(
     filename, raw = await _read_upload(file)
     text = _decode_upload_text(raw)
     try:
-        cleaned = await run_in_threadpool(process_bibliography_content, text)
+        cleaned = await process_bibliography_content(text)
     except ValueError as exc:
         raise HTTPException(status_code=422, detail=str(exc)) from exc
     except Exception as exc:  # noqa: BLE001

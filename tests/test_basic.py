@@ -1,6 +1,5 @@
 """Unit tests for bibcleaner enricher helpers."""
 
-import pytest
 from bibcleaner.enricher import extract_arxiv_id, _is_truncated, _format_authors
 
 

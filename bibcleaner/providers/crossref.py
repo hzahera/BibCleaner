@@ -3,9 +3,11 @@
 Supports both exact DOI resolution (preferred) and fuzzy title search.
 """
 
+import asyncio
 import os
+import time
 import logging
-import requests
+import httpx2
 from difflib import SequenceMatcher
 from typing import Optional
 
@@ -21,9 +23,20 @@ _PUBLISHED_TYPES = {
     "book-chapter": "incollection",
     "monograph": "book",
 }
-_HEADERS = {
-    "User-Agent": "bibcleaner/0.1 (https://github.com/hzahera/bib-cleaner)"
-}
+_HEADERS = {"User-Agent": "bibcleaner/0.1 (https://github.com/hzahera/bib-cleaner)"}
+
+_MIN_GAP = 2.0
+_last_call: float = 0.0
+_throttle_lock = asyncio.Lock()
+
+
+async def _throttle():
+    global _last_call
+    async with _throttle_lock:
+        elapsed = time.time() - _last_call
+        if elapsed < _MIN_GAP:
+            await asyncio.sleep(_MIN_GAP - elapsed)
+        _last_call = time.time()
 
 
 def _normalize(text: str) -> str:
@@ -47,7 +60,7 @@ def _format_authors(author_list: list) -> list:
     return names
 
 
-def search(title: str, rows: int = 5) -> list:
+async def search(client, title: str, rows: int = 5) -> list:
     """Return raw CrossRef items for a title query."""
     if not title:
         return []
@@ -55,45 +68,70 @@ def search(title: str, rows: int = 5) -> list:
     params: dict = {"query.title": title, "rows": rows}
     if mailto:
         params["mailto"] = mailto
-    try:
-        resp = requests.get(
-            _CROSSREF_URL, params=params, headers=_HEADERS, timeout=10
-        )
-        if resp.status_code == 200:
-            return resp.json().get("message", {}).get("items", [])
-        logger.warning(f"CrossRef HTTP {resp.status_code}")
-    except Exception as exc:
-        logger.warning(f"CrossRef request failed: {exc}")
+    for attempt in range(4):
+        await _throttle()
+        try:
+            resp = await client.get(_CROSSREF_URL, params=params, headers=_HEADERS)
+            if resp.status_code == 200:
+                return resp.json().get("message", {}).get("items", [])
+            if resp.status_code == 429:
+                retry_after = resp.headers.get("Retry-After")
+                wait = int(retry_after) if (retry_after or "").isdigit() else 2**attempt
+                logger.debug(f"CrossRef rate-limited; retrying in {wait}s")
+                await asyncio.sleep(wait)
+                continue
+            logger.warning(f"CrossRef HTTP {resp.status_code}")
+            return []
+        except httpx2.ConnectError as exc:
+            logger.debug(f"CrossRef connection error (attempt {attempt + 1}): {exc}")
+            await asyncio.sleep(1 + attempt)
+        except Exception as exc:
+            logger.warning(f"CrossRef request failed: {exc}")
+            return []
     return []
 
 
-def fetch_by_doi(doi: str) -> Optional[dict]:
+async def fetch_by_doi(client, doi: str) -> Optional[dict]:
     """Return the raw CrossRef item for an exact DOI, or None."""
     doi = _clean_doi(doi)
     if not doi:
         return None
     mailto = os.environ.get("CROSSREF_MAILTO", "")
     params = {"mailto": mailto} if mailto else {}
-    try:
-        resp = requests.get(
-            f"{_CROSSREF_URL}/{doi}", params=params, headers=_HEADERS, timeout=10
-        )
-        if resp.status_code == 200:
-            return resp.json().get("message")
-        if resp.status_code != 404:
-            logger.warning(f"CrossRef DOI HTTP {resp.status_code} for {doi}")
-    except Exception as exc:
-        logger.warning(f"CrossRef DOI request failed: {exc}")
+    for attempt in range(4):
+        await _throttle()
+        try:
+            resp = await client.get(
+                f"{_CROSSREF_URL}/{doi}", params=params, headers=_HEADERS
+            )
+            if resp.status_code == 200:
+                return resp.json().get("message")
+            if resp.status_code == 429:
+                retry_after = resp.headers.get("Retry-After")
+                wait = int(retry_after) if (retry_after or "").isdigit() else 2**attempt
+                logger.debug(f"CrossRef DOI rate-limited; retrying in {wait}s")
+                await asyncio.sleep(wait)
+                continue
+            if resp.status_code != 404:
+                logger.warning(f"CrossRef DOI HTTP {resp.status_code} for {doi}")
+            return None
+        except httpx2.ConnectError as exc:
+            logger.debug(f"CrossRef DOI connection error (attempt {attempt + 1}): {exc}")
+            await asyncio.sleep(1 + attempt)
+        except Exception as exc:
+            logger.warning(f"CrossRef DOI request failed: {exc}")
+            return None
     return None
 
 
-def best_match(
+async def best_match(
+    client,
     title: str,
     authors: Optional[list] = None,
     year: Optional[str] = None,
 ) -> Optional[dict]:
     """Return the best-matching CrossRef item, or None if no confident match."""
-    items = search(title, rows=5)
+    items = await search(client, title, rows=5)
     if not items:
         return None
 
@@ -168,16 +206,19 @@ def normalize(item: dict) -> Optional[dict]:
 class CrossrefProvider(Provider):
     name = "crossref"
 
-    def lookup(self, query: ProviderQuery) -> ProviderResult:
+    def __init__(self, client: httpx2.AsyncClient):
+        self.client = client
+
+    async def lookup(self, query: ProviderQuery) -> ProviderResult:
         # Exact DOI resolution takes precedence over fuzzy title search.
         if query.doi:
-            item = fetch_by_doi(query.doi)
+            item = await fetch_by_doi(self.client, query.doi)
             if item and item.get("type") not in _PREPRINT_TYPES:
                 data = normalize(item)
                 if data:
                     return ProviderResult(published_data=data, matched=True)
 
-        item = best_match(query.title, query.authors, query.year)
+        item = await best_match(self.client, query.title, query.authors, query.year)
         if not item:
             return ProviderResult()
 

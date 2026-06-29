@@ -24,8 +24,11 @@ classifiers = [
 ]
 
 dependencies = [
-    "requests>=2.25.0",
     "bibtexparser==2.0.0b9",
+    "fastapi>=0.136.3",
+    "httpx2[http2]>=2.2.0",
+    "pytest-asyncio>=1.4.0",
+    "python-multipart>=0.0.29",
     "tqdm>=4.65.0",
 ]
 

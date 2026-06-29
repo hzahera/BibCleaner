@@ -71,8 +71,10 @@ def _merge_into(keep: Entry, drop: Entry) -> None:
     """
     have = {f.key.lower() for f in keep.fields}
     keep_type = keep.entry_type.lower()
-    blocked = {"journal"} if keep_type == "inproceedings" else (
-        {"booktitle"} if keep_type == "article" else set()
+    blocked = (
+        {"journal"}
+        if keep_type == "inproceedings"
+        else ({"booktitle"} if keep_type == "article" else set())
     )
     for f in drop.fields:
         key = f.key.lower()
@@ -91,9 +93,9 @@ def deduplicate(entries: list) -> tuple:
     key to the key of the entry it was merged into.  First-seen order of the
     surviving entries is preserved.
     """
-    best: dict = {}      # identity -> kept Entry
-    order: list = []     # surviving entries, in first-seen order
-    remap: dict = {}     # dropped key -> surviving key
+    best: dict = {}  # identity -> kept Entry
+    order: list = []  # surviving entries, in first-seen order
+    remap: dict = {}  # dropped key -> surviving key
 
     for entry in entries:
         ident = _identity(entry)

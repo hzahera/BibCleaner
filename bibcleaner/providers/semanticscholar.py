@@ -6,8 +6,8 @@ import time
 import logging
 from typing import Optional
 
-import requests
-
+import httpx2
+import asyncio
 from .provider import Provider, ProviderQuery, ProviderResult
 
 logger = logging.getLogger(__name__)
@@ -18,19 +18,23 @@ _SS_FIELDS = (
 _ARXIV_VENUES = frozenset({"arxiv", "arxiv.org", "corr", "arxiv e-prints", ""})
 
 # Semantic Scholar public API: ~1 req/sec without a key, higher with one.
-_MIN_REQUEST_GAP = 3.0
+_MIN_GAP = 3.0
 _last_request_time: float = 0.0
+_throttle_lock = asyncio.Lock()
 
 
-def _throttle():
+async def _throttle():
     global _last_request_time
-    elapsed = time.time() - _last_request_time
-    if elapsed < _MIN_REQUEST_GAP:
-        time.sleep(_MIN_REQUEST_GAP - elapsed)
-    _last_request_time = time.time()
+    async with _throttle_lock:
+        elapsed = time.time() - _last_request_time
+        if elapsed < _MIN_GAP:
+            await asyncio.sleep(_MIN_GAP - elapsed)
+        _last_request_time = time.time()
 
 
-def fetch_by_arxiv_id(arxiv_id: str, retries: int = 3) -> Optional[dict]:
+async def fetch_by_arxiv_id(
+    client: httpx2.AsyncClient, arxiv_id: str, retries: int = 3
+) -> Optional[dict]:
     """Fetch paper metadata from Semantic Scholar using an arXiv ID.
 
     Set the S2_API_KEY environment variable to use a higher-rate-limit key.
@@ -44,9 +48,9 @@ def fetch_by_arxiv_id(arxiv_id: str, retries: int = 3) -> Optional[dict]:
     headers = {"x-api-key": api_key} if api_key else {}
 
     for attempt in range(retries):
-        _throttle()
+        await _throttle()
         try:
-            resp = requests.get(url, params=params, headers=headers, timeout=10)
+            resp = await client.get(url, params=params, headers=headers)
             if resp.status_code == 200:
                 return resp.json()
             if resp.status_code == 429:
@@ -57,7 +61,7 @@ def fetch_by_arxiv_id(arxiv_id: str, retries: int = 3) -> Optional[dict]:
                     break
                 wait = 10 * (2**attempt)  # 10s, 20s, 40s
                 logger.warning(f"Semantic Scholar rate-limited; retrying in {wait}s")
-                time.sleep(wait)
+                await asyncio.sleep(wait)
             elif resp.status_code == 404:
                 logger.debug(f"arXiv:{arxiv_id} not found in Semantic Scholar")
                 break
@@ -66,7 +70,7 @@ def fetch_by_arxiv_id(arxiv_id: str, retries: int = 3) -> Optional[dict]:
                     f"Semantic Scholar HTTP {resp.status_code} for arXiv:{arxiv_id}"
                 )
                 break
-        except requests.RequestException as exc:
+        except httpx2.RequestError as exc:
             logger.warning(f"Semantic Scholar request failed: {exc}")
             break
     return None
@@ -125,11 +129,14 @@ def _to_data(paper: dict) -> Optional[dict]:
 class SemanticScholarProvider(Provider):
     name = "semanticscholar"
 
-    def lookup(self, query: ProviderQuery) -> ProviderResult:
+    def __init__(self, client: httpx2.AsyncClient):
+        self.client = client
+
+    async def lookup(self, query: ProviderQuery) -> ProviderResult:
         if not query.arxiv_id:
             return ProviderResult()
 
-        paper = fetch_by_arxiv_id(query.arxiv_id)
+        paper = await fetch_by_arxiv_id(self.client, query.arxiv_id)
         if not paper:
             return ProviderResult()
 

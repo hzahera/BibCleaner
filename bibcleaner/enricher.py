@@ -26,6 +26,8 @@ import logging
 from typing import Optional
 
 from bibtexparser.model import Entry, Field
+import httpx2
+import asyncio
 
 from .providers import (
     ProviderQuery,
@@ -43,14 +45,19 @@ logger = logging.getLogger(__name__)
 
 _ARXIV_FIELDS = {"eprint", "archiveprefix", "primaryclass"}
 
-# Provider instances (stateful: throttling, OpenAlex cache).
-_arxiv = ArxivProvider()
-_dblp = DblpProvider()
-_crossref = CrossrefProvider()
-_ss = SemanticScholarProvider()
-_openalex = OpenAlexClient(
-    mailto=os.environ.get("OPENALEX_MAILTO") or os.environ.get("CROSSREF_MAILTO")
-)
+
+class ProviderRegistry:
+    def __init__(self, client):
+        self.arxiv = ArxivProvider(client)
+        self.dblp = DblpProvider(client)
+        self.crossref = CrossrefProvider(client)
+        self.semanticscholar = SemanticScholarProvider(client)
+        self.openalex = OpenAlexClient(
+            client=client,
+            mailto=os.environ.get("OPENALEX_MAILTO")
+            or os.environ.get("CROSSREF_MAILTO"),
+        )
+
 
 # Shared cache so repeated arXiv IDs / DOIs / titles don't re-hit the APIs.
 _lookup_cache = TTLCache(ttl=float(os.environ.get("BIBCLEANER_CACHE_TTL", 86400)))
@@ -66,15 +73,16 @@ def _cache_key(provider_name: str, q: ProviderQuery) -> tuple:
     )
 
 
-def _lookup(provider, q: ProviderQuery) -> ProviderResult:
+async def _lookup(provider, q: ProviderQuery) -> ProviderResult:
     """provider.lookup(q), memoized (including negative results)."""
     key = _cache_key(provider.name, q)
     cached = _lookup_cache.get(key)
     if cached is not None:
         return cached
-    result = provider.lookup(q)
+    result = await provider.lookup(q)
     _lookup_cache.set(key, result)
     return result
+
 
 # Canonical venues that are conference proceedings but whose names lack the
 # usual hint words ("conference", "proceedings", ...).
@@ -82,12 +90,20 @@ _CONF_OVERRIDES = {
     "Advances in Neural Information Processing Systems (NeurIPS)",
     "Interspeech",
 }
-_CONF_HINTS = ("conference", "symposium", "workshop", "meeting", "proceedings", "congress")
+_CONF_HINTS = (
+    "conference",
+    "symposium",
+    "workshop",
+    "meeting",
+    "proceedings",
+    "congress",
+)
 
 
 # ---------------------------------------------------------------------------
 # arXiv ID extraction
 # ---------------------------------------------------------------------------
+
 
 def extract_arxiv_id(fields: dict) -> Optional[str]:
     """Return a bare arXiv ID (e.g. '2410.03834') from a BibTeX fields dict, or None."""
@@ -108,6 +124,7 @@ def extract_arxiv_id(fields: dict) -> Optional[str]:
 # ---------------------------------------------------------------------------
 # Field helpers
 # ---------------------------------------------------------------------------
+
 
 def _set_field(entry: Entry, key: str, value: str):
     for f in entry.fields:
@@ -133,7 +150,9 @@ def _is_truncated(author_str: str) -> bool:
 def _count_authors(author_str: str) -> int:
     if not author_str:
         return 0
-    return len([a for a in re.split(r"\band\b", author_str, flags=re.IGNORECASE) if a.strip()])
+    return len(
+        [a for a in re.split(r"\band\b", author_str, flags=re.IGNORECASE) if a.strip()]
+    )
 
 
 def _better_authors(candidate: list, current_str: str) -> bool:
@@ -148,6 +167,7 @@ def _better_authors(candidate: list, current_str: str) -> bool:
 # ---------------------------------------------------------------------------
 # Author preference + apply
 # ---------------------------------------------------------------------------
+
 
 def _prefer_canonical(data: dict, canonical_authors: list):
     """Replace data['authors'] with the arXiv canonical list when it is richer."""
@@ -193,7 +213,9 @@ def _apply(entry: Entry, data: dict, fields: dict):
     _remove_fields(entry, _ARXIV_FIELDS)
 
 
-def _normalize_preprint(entry: Entry, fields: dict, authors: list, primaryclass: Optional[str]):
+def _normalize_preprint(
+    entry: Entry, fields: dict, authors: list, primaryclass: Optional[str]
+):
     """Convert a confirmed-preprint entry to a clean @misc with eprint fields."""
     arxiv_id = extract_arxiv_id(fields)
     if not arxiv_id:
@@ -214,6 +236,7 @@ def _normalize_preprint(entry: Entry, fields: dict, authors: list, primaryclass:
 # ---------------------------------------------------------------------------
 # arXiv journal_ref → venue data
 # ---------------------------------------------------------------------------
+
 
 def _venue_core(journal_ref: str) -> str:
     """Extract the bare venue name from a free-text arXiv journal_ref."""
@@ -263,38 +286,45 @@ def _data_from_journal_ref(journal_ref: str, year, authors: list) -> Optional[di
 # DOI-first exact resolution
 # ---------------------------------------------------------------------------
 
-def _resolve_by_doi(doi: str) -> Optional[dict]:
+
+async def _resolve_by_doi(providers, doi: str) -> Optional[dict]:
     """Resolve a DOI to structured venue data via CrossRef, then OpenAlex."""
     doi_query = ProviderQuery(doi=doi)  # empty title => providers skip title search
-    for provider in (_crossref, _openalex):
-        result = _lookup(provider, doi_query)
-        if result.published_data:
-            return result.published_data
-    return None
+    cr_task = _lookup(providers.crossref, doi_query)
+    oa_task = _lookup(providers.openalex, doi_query)
+
+    cr_res, oa_res = await asyncio.gather(cr_task, oa_task)
+    return cr_res.published_data or oa_res.published_data
 
 
 # Method-based confidence: *how* the venue was matched is the main reliability
 # signal — an exact arXiv-ID / DOI match is trustworthy; a fuzzy title search
 # (especially OpenAlex, the last resort) is less so.
 _SOURCE_CONFIDENCE = {
-    "doi": 1.0,             # exact DOI resolution
-    "journal_ref": 0.97,    # author-declared venue on arXiv
+    "doi": 1.0,  # exact DOI resolution
+    "journal_ref": 0.97,  # author-declared venue on arXiv
     "semanticscholar": 0.95,  # exact arXiv-ID lookup
-    "dblp": 0.85,           # title search (authoritative for CS)
-    "crossref": 0.80,       # title search
-    "openalex": 0.75,       # last-resort title search
+    "dblp": 0.85,  # title search (authoritative for CS)
+    "crossref": 0.80,  # title search
+    "openalex": 0.75,  # last-resort title search
 }
 # Matches below this are flagged for review rather than applied.
 _MIN_CONFIDENCE = float(os.environ.get("BIBCLEANER_MIN_CONFIDENCE", "0.8"))
 
 
-def resolve_entry(fields: dict) -> dict:
+async def resolve_entry(
+    client: httpx2.AsyncClient,
+    fields: dict,
+    provider_registry: ProviderRegistry = None,
+) -> dict:
     """Resolve an entry's published venue, with a confidence score.
 
     Returns a dict with keys: arxiv_id, data (venue dict | None), confidence
     (0..1), source (which API matched it), canonical_authors, primaryclass,
     preprint_authors.  Used by both enrich_entry and the evaluation harness.
     """
+    if provider_registry is None:
+        provider_registry = ProviderRegistry(client)
     out = {
         "arxiv_id": extract_arxiv_id(fields),
         "data": None,
@@ -310,12 +340,17 @@ def resolve_entry(fields: dict) -> dict:
 
     title = fields.get("title", "")
     raw_author = fields.get("author", "")
-    authors = [a.strip() for a in re.split(r"\band\b", raw_author, flags=re.IGNORECASE) if a.strip()]
+    authors = [
+        a.strip()
+        for a in re.split(r"\band\b", raw_author, flags=re.IGNORECASE)
+        if a.strip()
+    ]
     year = fields.get("year")
 
     # Step 1: arXiv API — canonical authors, category, declared venue.
-    arxiv_res = _lookup(
-        _arxiv, ProviderQuery(title=title, authors=authors, year=year, arxiv_id=arxiv_id)
+    arxiv_res = await _lookup(
+        provider_registry.arxiv,
+        ProviderQuery(title=title, authors=authors, year=year, arxiv_id=arxiv_id),
     )
     out["canonical_authors"] = arxiv_res.canonical_authors
     out["primaryclass"] = arxiv_res.primaryclass
@@ -327,36 +362,39 @@ def resolve_entry(fields: dict) -> dict:
 
     # Step 2: DOI-first exact resolution.
     if doi:
-        data = _resolve_by_doi(doi)
+        data = await _resolve_by_doi(provider_registry, doi)
         if data:
             source = "doi"
 
-    # Step 3: DBLP title search.
     dblp_res = ProviderResult()
+    cr_res = ProviderResult()
+    ss_res = ProviderResult()
+    oa_res = ProviderResult()
+
+    # Step 3: Title-based lookups — only if DOI didn't find a match.
     if data is None:
-        dblp_res = _lookup(_dblp, tquery)
+        dblp_task = _lookup(provider_registry.dblp, tquery)
+        crossref_task = _lookup(provider_registry.crossref, tquery)
+        dblp_res, cr_res = await asyncio.gather(dblp_task, crossref_task)
+
         if dblp_res.published_data:
             data, source = dblp_res.published_data, "dblp"
-
-    # Step 4: CrossRef title search.
-    cr_res = ProviderResult()
-    if data is None:
-        cr_res = _lookup(_crossref, tquery)
-        if cr_res.published_data:
+        elif cr_res.published_data:
             data, source = cr_res.published_data, "crossref"
 
-    # Steps 5 & 6: SS + OpenAlex, only if DBLP/CrossRef didn't recognise it.
-    ss_res = ProviderResult()
+    # Steps 4 & 5: SS + OpenAlex — only if no published venue yet and
+    # DBLP/CrossRef didn't recognise the entry at all.
     if data is None and not (dblp_res.matched or cr_res.matched):
-        ss_res = _lookup(_ss, tquery)
+        ss_task = _lookup(provider_registry.semanticscholar, tquery)
+        openalex_task = _lookup(provider_registry.openalex, tquery)
+        ss_res, oa_res = await asyncio.gather(ss_task, openalex_task)
+
         if ss_res.published_data:
             data, source = ss_res.published_data, "semanticscholar"
-        else:
-            oa_res = _lookup(_openalex, tquery)
-            if oa_res.published_data:
-                data, source = oa_res.published_data, "openalex"
+        elif oa_res.published_data:
+            data, source = oa_res.published_data, "openalex"
 
-    # Step 7: arXiv journal_ref fallback (known venues only).
+    # Step 6: arXiv journal_ref fallback (known venues only).
     if data is None and arxiv_res.journal_ref:
         jr = _data_from_journal_ref(
             arxiv_res.journal_ref, arxiv_res.year or year, arxiv_res.canonical_authors
@@ -371,7 +409,9 @@ def resolve_entry(fields: dict) -> dict:
         out["confidence"] = _SOURCE_CONFIDENCE.get(source, 0.0)
 
     out["preprint_authors"] = (
-        arxiv_res.canonical_authors or dblp_res.preprint_authors or ss_res.preprint_authors
+        arxiv_res.canonical_authors
+        or dblp_res.preprint_authors
+        or ss_res.preprint_authors
     )
     return out
 
@@ -379,8 +419,19 @@ def resolve_entry(fields: dict) -> dict:
 # ---------------------------------------------------------------------------
 # Public entry point
 # ---------------------------------------------------------------------------
+sem = asyncio.Semaphore(20)
 
-def enrich_entry(entry: Entry) -> bool:
+
+async def enrich_limited(client, entry, provider_registry=None):
+    async with sem:
+        return await enrich_entry(client, entry, provider_registry)
+
+
+async def enrich_entry(
+    client: httpx2.AsyncClient,
+    entry: Entry,
+    provider_registry: ProviderRegistry = None,
+) -> bool:
     """Enrich an arXiv preprint entry with published venue and full author data.
 
     Confident matches are applied; low-confidence candidates are left as clean
@@ -388,7 +439,7 @@ def enrich_entry(entry: Entry) -> bool:
     venue is never written silently.  Returns True if the entry changed.
     """
     fields = {f.key: f.value for f in entry.fields}
-    res = resolve_entry(fields)
+    res = await resolve_entry(client, fields, provider_registry)
 
     arxiv_id = res["arxiv_id"]
     if not arxiv_id:
@@ -427,6 +478,7 @@ def enrich_entry(entry: Entry) -> bool:
 # ---------------------------------------------------------------------------
 # Venue-only normalization (runs on every entry, including non-arXiv ones)
 # ---------------------------------------------------------------------------
+
 
 def normalize_venue_fields(entry: Entry) -> bool:
     """Normalize booktitle / journal to canonical full venue names.

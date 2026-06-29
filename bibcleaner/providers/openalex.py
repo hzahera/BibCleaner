@@ -1,5 +1,6 @@
 # bibcleaner/providers/openalex.py
 
+import asyncio
 import json
 import logging
 import os
@@ -7,7 +8,7 @@ import time
 from difflib import SequenceMatcher
 from typing import Dict, List, Optional
 
-import requests
+import httpx2
 
 from .provider import Provider, ProviderQuery, ProviderResult
 
@@ -47,6 +48,7 @@ class OpenAlexClient(Provider):
 
     def __init__(
         self,
+        client: httpx2.AsyncClient = None,
         rate_limit_delay: float = 0.2,
         timeout: int = 10,
         cache_path: str = ".bibcleaner_openalex_cache.json",
@@ -56,7 +58,7 @@ class OpenAlexClient(Provider):
         self.timeout = timeout
         self.cache_path = cache_path
         self.mailto = mailto
-        self.session = requests.Session()
+        self.client = client
         self.last_request_time = 0.0
         self.cache = self._load_cache()
 
@@ -78,20 +80,20 @@ class OpenAlexClient(Provider):
         except Exception as e:
             logger.warning(f"Could not save OpenAlex cache: {e}")
 
-    def _rate_limit(self):
+    async def _rate_limit(self):
         elapsed = time.time() - self.last_request_time
         if elapsed < self.rate_limit_delay:
-            time.sleep(self.rate_limit_delay - elapsed)
+            await asyncio.sleep(self.rate_limit_delay - elapsed)
         self.last_request_time = time.time()
 
-    def _request(self, params: Dict) -> Optional[Dict]:
-        self._rate_limit()
+    async def _request(self, params: Dict) -> Optional[Dict]:
+        await self._rate_limit()
         try:
             if self.mailto:
                 params = dict(params)
                 params["mailto"] = self.mailto
 
-            response = self.session.get(
+            response = await self.client.get(
                 OPENALEX_WORKS, params=params, timeout=self.timeout
             )
             if response.status_code == 200:
@@ -101,11 +103,11 @@ class OpenAlexClient(Provider):
                 f"OpenAlex error ({response.status_code}): {response.text[:200]}"
             )
             return None
-        except requests.RequestException as e:
+        except httpx2.RequestError as e:
             logger.warning(f"OpenAlex request failed: {e}")
             return None
 
-    def fetch_by_doi(self, doi: str) -> Optional[Dict]:
+    async def fetch_by_doi(self, doi: str) -> Optional[Dict]:
         doi = _normalize_doi(doi)
         if not doi:
             return None
@@ -118,16 +120,15 @@ class OpenAlexClient(Provider):
             "filter": f"doi:https://doi.org/{doi}",
             "per-page": 1,
         }
-        data = self._request(params)
+        data = await self._request(params)
         work = None
         if data and data.get("results"):
             work = data["results"][0]
 
         self.cache[cache_key] = work
-        self._save_cache()
         return work
 
-    def search_by_title(self, title: str, max_results: int = 5) -> List[Dict]:
+    async def search_by_title(self, title: str, max_results: int = 5) -> List[Dict]:
         title = (title or "").strip()
         if not title:
             return []
@@ -140,20 +141,19 @@ class OpenAlexClient(Provider):
             "search": title,
             "per-page": max_results,
         }
-        data = self._request(params)
+        data = await self._request(params)
         works = data.get("results", []) if data else []
 
         self.cache[cache_key] = works
-        self._save_cache()
         return works
 
-    def best_match(
+    async def best_match(
         self,
         title: str,
         authors: Optional[List[str]] = None,
         year: Optional[str] = None,
     ) -> Optional[Dict]:
-        candidates = self.search_by_title(title, max_results=5)
+        candidates = await self.search_by_title(title, max_results=5)
         if not candidates:
             return None
 
@@ -254,11 +254,13 @@ class OpenAlexClient(Provider):
 
         return ProviderResult(published_data=normalized, matched=True)
 
-    def lookup(self, query: ProviderQuery) -> ProviderResult:
+    async def lookup(self, query: ProviderQuery) -> ProviderResult:
         # Exact DOI resolution takes precedence over fuzzy title search.
         if query.doi:
-            result = self._published_from_work(self.fetch_by_doi(query.doi))
+            result = self._published_from_work(await self.fetch_by_doi(query.doi))
             if result.published_data:
                 return result
 
-        return self._published_from_work(self.best_match(query.title, query.authors, query.year))
+        return self._published_from_work(
+            await self.best_match(query.title, query.authors, query.year)
+        )

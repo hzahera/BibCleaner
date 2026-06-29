@@ -35,5 +35,5 @@ class Provider(ABC):
     name = "provider"
 
     @abstractmethod
-    def lookup(self, query: ProviderQuery) -> ProviderResult:
+    async def lookup(self, query: ProviderQuery) -> ProviderResult:
         """Resolve metadata for the given query."""

@@ -1,12 +1,19 @@
 import bibtexparser
-from tqdm import tqdm
 
-from .enricher import enrich_entry, normalize_venue_fields, extract_arxiv_id
+from .enricher import (
+    ProviderRegistry,
+    enrich_limited,
+    normalize_venue_fields,
+    extract_arxiv_id,
+)
 from .providers.arxiv import fetch_many as _arxiv_fetch_many
 from .latex import protect_title_caps
 from .dedup import deduplicate
 from .citations import prune_unused, rewrite_tex as rewrite_tex_files
 from .keys import normalize_keys as normalize_entry_keys
+from .apicontext import ApiContext
+import asyncio
+import time
 
 
 def _protect_caps(entry) -> bool:
@@ -20,7 +27,7 @@ def _protect_caps(entry) -> bool:
     return False
 
 
-def process_bibliography_content(
+async def process_bibliography_content(
     content,
     *,
     enrich: bool = True,
@@ -45,6 +52,33 @@ def process_bibliography_content(
                      remap (dedup + normalization) to those files in place.
     progress       : optional callable(done, total) invoked per processed entry.
     """
+    async with ApiContext() as async_client:
+        return await _process_with_client(
+            async_client,
+            content,
+            enrich=enrich,
+            protect_caps=protect_caps,
+            dedup=dedup,
+            cited_keys=cited_keys,
+            normalize_keys=normalize_keys,
+            rewrite_tex=rewrite_tex,
+            progress=progress,
+        )
+
+
+async def _process_with_client(
+    client,
+    content,
+    *,
+    enrich: bool = True,
+    protect_caps: bool = True,
+    dedup: bool = False,
+    cited_keys=None,
+    normalize_keys: bool = False,
+    rewrite_tex=None,
+    progress=None,
+) -> str:
+    start = time.time()
     if isinstance(content, bytes):
         try:
             bibtex_str = content.decode("utf-8")
@@ -61,6 +95,8 @@ def process_bibliography_content(
 
     # ---- 0. Warm the arXiv cache in one batched request (avoids per-entry
     #         calls that trip arXiv's rate limit). ----
+    provider_registry = ProviderRegistry(client)
+
     if enrich:
         arxiv_ids = []
         for entry in entries:
@@ -69,38 +105,32 @@ def process_bibliography_content(
                 arxiv_ids.append(aid)
         if arxiv_ids:
             try:
-                _arxiv_fetch_many(arxiv_ids)
+                await _arxiv_fetch_many(client, arxiv_ids)
             except Exception as exc:  # never let prefetch block processing
                 print(f"  Warning: arXiv prefetch failed: {exc}")
 
     # ---- 1. Enrich, normalize venues, protect capitalization ----
     enriched = venue_normalized = caps = 0
-    total = len(entries)
-    iterator = tqdm(entries, desc="Processing entries") if enrich else entries
-    for i, entry in enumerate(iterator):
-        try:
-            if enrich and enrich_entry(entry):
-                enriched += 1
-            elif normalize_venue_fields(entry):
-                venue_normalized += 1
-        except Exception as exc:
-            print(f"  Warning: could not process {entry.key}: {exc}")
+    tasks = [enrich_limited(client, entry, provider_registry) for entry in entries]
+    await asyncio.gather(*tasks)  # run enrichments in parallel to speed up
+    for entry in entries:
+        if entry.get("enriched"):
+            enriched += 1
+        if normalize_venue_fields(entry):
+            venue_normalized += 1
         if protect_caps and _protect_caps(entry):
             caps += 1
-        if progress is not None:
-            try:
-                progress(i + 1, total)
-            except Exception:
-                pass
 
     # Second venue pass so enriched entries also get the canonical form.
     for entry in entries:
         normalize_venue_fields(entry)
-
+    end = time.time()
+    elapsed_time = end - start
     print(
         f"Done: {enriched} arXiv entrie(s) enriched, "
         f"{venue_normalized} venue name(s) normalized, "
-        f"{caps} title(s) capitalization-protected."
+        f"{caps} title(s) capitalization-protected. "
+        f"(Elapsed time: {elapsed_time:.2f} seconds)"
     )
 
     # The full key set before any merging/pruning — used to flag truly missing
@@ -166,7 +196,7 @@ def process_bibliography_content(
     return bibtexparser.write_string(library)
 
 
-def process_bibliography(input_path: str, output_path: str, **options):
+async def process_bibliography(input_path: str, output_path: str, **options):
     """Parse, clean, and save the bibliography. See process_bibliography_content."""
     print(f"Reading {input_path}...")
 
@@ -174,7 +204,7 @@ def process_bibliography(input_path: str, output_path: str, **options):
         bibtex_str = fh.read()
 
     print("Starting processing...")
-    cleaned_bib = process_bibliography_content(bibtex_str, **options)
+    cleaned_bib = await process_bibliography_content(bibtex_str, **options)
     print(f"Writing to {output_path}...")
 
     with open(output_path, "w", encoding="utf-8") as fh:
