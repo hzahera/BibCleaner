@@ -6,13 +6,14 @@ arXiv throttles per-IP, and BibCleaner needs one lookup per arXiv entry, so we
 turning N per-entry calls into ceil(N / batch) network calls.
 """
 
+import asyncio
 import re
 import time
 import logging
 from typing import Optional
 from xml.etree import ElementTree as ET
 
-import requests
+import httpx2
 
 from .provider import Provider, ProviderQuery, ProviderResult
 
@@ -24,20 +25,22 @@ _NS = {
     "arxiv": "http://arxiv.org/schemas/atom",
 }
 _HEADERS = {"User-Agent": "bibcleaner/0.1 (https://github.com/hzahera/bib-cleaner)"}
-_MIN_GAP = 3.0          # arXiv asks for >= 3 s between calls
-_BATCH_SIZE = 100       # IDs per batched request
-_CACHE_CAP = 10000      # bound the per-process cache
+_MIN_GAP = 3.0  # arXiv asks for >= 3 s between calls
+_BATCH_SIZE = 100  # IDs per batched request
+_CACHE_CAP = 10000  # bound the per-process cache
 
 _last_call: float = 0.0
-_cache: dict = {}       # bare arXiv id -> meta dict | None (None = not found)
+_throttle_lock = asyncio.Lock()
+_cache: dict = {}  # bare arXiv id -> meta dict | None (None = not found)
 
 
-def _throttle():
+async def _throttle():
     global _last_call
-    elapsed = time.time() - _last_call
-    if elapsed < _MIN_GAP:
-        time.sleep(_MIN_GAP - elapsed)
-    _last_call = time.time()
+    async with _throttle_lock:
+        elapsed = time.time() - _last_call
+        if elapsed < _MIN_GAP:
+            await asyncio.sleep(_MIN_GAP - elapsed)
+        _last_call = time.time()
 
 
 def _norm_id(raw: str) -> str:
@@ -50,27 +53,33 @@ def _cache_put(key: str, value):
     _cache[key] = value
 
 
-def _request(params: dict) -> Optional[str]:
+async def _request(client, params: dict) -> Optional[str]:
     """GET the arXiv API with throttle + retry on timeout/5xx/429. Text or None."""
     for attempt in range(3):
-        _throttle()
+        await _throttle()
         try:
-            resp = requests.get(_ARXIV_API, params=params, headers=_HEADERS, timeout=20)
+            resp = await client.get(_ARXIV_API, params=params, headers=_HEADERS)
             if resp.status_code == 200:
                 return resp.text
             if resp.status_code == 429 or 500 <= resp.status_code < 600:
                 retry_after = resp.headers.get("Retry-After")
-                wait = int(retry_after) if (retry_after or "").isdigit() else 2 * (attempt + 1)
-                logger.debug(f"arXiv API HTTP {resp.status_code} (attempt {attempt + 1})")
+                wait = (
+                    int(retry_after)
+                    if (retry_after or "").isdigit()
+                    else 2 * (attempt + 1)
+                )
+                logger.debug(
+                    f"arXiv API HTTP {resp.status_code} (attempt {attempt + 1})"
+                )
                 if attempt < 2:
-                    time.sleep(wait)
+                    await asyncio.sleep(wait)
                 continue
             logger.warning(f"arXiv API HTTP {resp.status_code}")
             return None
-        except requests.exceptions.RequestException as exc:
+        except httpx2.ConnectError as exc:
             logger.debug(f"arXiv API request error (attempt {attempt + 1}): {exc}")
             if attempt < 2:
-                time.sleep(2 * (attempt + 1))  # 2s, 4s
+                await asyncio.sleep(2 * (attempt + 1))  # 2s, 4s
     return None
 
 
@@ -115,7 +124,7 @@ def _parse_entry(entry) -> Optional[dict]:
     }
 
 
-def fetch_many(arxiv_ids) -> dict:
+async def fetch_many(client, arxiv_ids) -> dict:
     """Resolve many arXiv IDs in batched requests; populates the cache.
 
     Returns a mapping of bare id -> meta dict for the ones that were found.
@@ -132,8 +141,10 @@ def fetch_many(arxiv_ids) -> dict:
 
     found: dict = {}
     for start in range(0, len(ids), _BATCH_SIZE):
-        chunk = ids[start:start + _BATCH_SIZE]
-        text = _request({"id_list": ",".join(chunk), "max_results": len(chunk)})
+        chunk = ids[start : start + _BATCH_SIZE]
+        text = await _request(
+            client, {"id_list": ",".join(chunk), "max_results": len(chunk)}
+        )
         if text is None:
             continue  # leave these uncached so per-entry fetch can retry
         try:
@@ -158,13 +169,13 @@ def fetch_many(arxiv_ids) -> dict:
     return found
 
 
-def fetch(arxiv_id: str) -> Optional[dict]:
+async def fetch(client, arxiv_id: str) -> Optional[dict]:
     """Return metadata for a single arXiv ID (cache-first), or None."""
     key = _norm_id(arxiv_id)
     if key in _cache:
         return _cache[key]
 
-    text = _request({"id_list": key})
+    text = await _request(client, {"id_list": key})
     if text is None:
         logger.warning(f"arXiv API unavailable for {arxiv_id} after retries")
         return None  # don't cache transient failures
@@ -185,11 +196,14 @@ def fetch(arxiv_id: str) -> Optional[dict]:
 class ArxivProvider(Provider):
     name = "arxiv"
 
-    def lookup(self, query: ProviderQuery) -> ProviderResult:
+    def __init__(self, client: httpx2.AsyncClient):
+        self.client = client
+
+    async def lookup(self, query: ProviderQuery) -> ProviderResult:
         if not query.arxiv_id:
             return ProviderResult()
 
-        meta = fetch(query.arxiv_id)
+        meta = await fetch(self.client, query.arxiv_id)
         if not meta:
             return ProviderResult()
 

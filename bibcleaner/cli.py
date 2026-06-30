@@ -1,4 +1,5 @@
 import argparse
+import asyncio
 import sys
 import os
 
@@ -63,15 +64,17 @@ def main():
     cited_keys = collect_cited_keys(args.keep_cited) if args.keep_cited else None
 
     try:
-        process_bibliography(
-            input_file,
-            output_file,
-            enrich=not args.no_enrich,
-            protect_caps=not args.no_protect_caps,
-            dedup=args.dedup,
-            cited_keys=cited_keys,
-            normalize_keys=args.normalize_keys,
-            rewrite_tex=args.rewrite_tex,
+        asyncio.run(
+            process_bibliography(
+                input_file,
+                output_file,
+                enrich=not args.no_enrich,
+                protect_caps=not args.no_protect_caps,
+                dedup=args.dedup,
+                cited_keys=cited_keys,
+                normalize_keys=args.normalize_keys,
+                rewrite_tex=args.rewrite_tex,
+            )
         )
     except KeyboardInterrupt:
         print("\nProcess interrupted by user.")

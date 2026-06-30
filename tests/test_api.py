@@ -55,7 +55,7 @@ def test_health_reports_service_info_and_active_jobs():
 def test_job_flow_uses_uploaded_text_and_returns_cleaned_result(monkeypatch):
     seen = {}
 
-    def fake_process(content, **options):
+    async def fake_process(content, **options):
         seen["content"] = content
         seen["options"] = options
         progress = options["progress"]
@@ -84,14 +84,17 @@ def test_job_flow_uses_uploaded_text_and_returns_cleaned_result(monkeypatch):
     result = client.get(f"/jobs/{job_id}/result")
     assert result.status_code == 200
     assert result.text == "@article{demo,title={Cleaned}}\n"
-    assert result.headers["content-disposition"] == 'attachment; filename="cleaned_refs.bib"'
+    assert (
+        result.headers["content-disposition"]
+        == 'attachment; filename="cleaned_refs.bib"'
+    )
     assert result.headers["content-type"].startswith("text/x-bibtex")
 
 
 def test_clean_bib_alias_returns_cleaned_response(monkeypatch):
     seen = {}
 
-    def fake_process(content, **options):
+    async def fake_process(content, **options):
         seen["content"] = content
         seen["options"] = options
         return "@article{demo,title={Sync Cleaned}}\n"
@@ -105,7 +108,10 @@ def test_clean_bib_alias_returns_cleaned_response(monkeypatch):
 
     assert response.status_code == 200
     assert response.text == "@article{demo,title={Sync Cleaned}}\n"
-    assert response.headers["content-disposition"] == 'attachment; filename="cleaned_refs.bib"'
+    assert (
+        response.headers["content-disposition"]
+        == 'attachment; filename="cleaned_refs.bib"'
+    )
     assert response.headers["content-type"].startswith("text/x-bibtex")
     assert seen["content"] == SAMPLE_BIB.decode("utf-8")
     assert seen["options"] == {}
@@ -118,7 +124,9 @@ def test_validation_passes_bytes_and_returns_json(monkeypatch):
         seen["content"] = content
         return [{"entry_id": "demo", "errors": ["author"], "warnings": ["doi"]}]
 
-    monkeypatch.setattr("bibcleaner.web_api.validate_bibliography_content", fake_validate)
+    monkeypatch.setattr(
+        "bibcleaner.web_api.validate_bibliography_content", fake_validate
+    )
 
     response = client.post(
         "/validation",
@@ -126,7 +134,9 @@ def test_validation_passes_bytes_and_returns_json(monkeypatch):
     )
 
     assert response.status_code == 200
-    assert response.json() == [{"entry_id": "demo", "errors": ["author"], "warnings": ["doi"]}]
+    assert response.json() == [
+        {"entry_id": "demo", "errors": ["author"], "warnings": ["doi"]}
+    ]
     assert seen["content"] == SAMPLE_BIB
 
 

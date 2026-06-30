@@ -1,12 +1,14 @@
 """DBLP title-search client — fast, rate-limit-free, authoritative for CS."""
 
+import asyncio
+import random
 import re
 import time
 import logging
 from difflib import SequenceMatcher
 from typing import Optional
 
-import requests
+import httpx2
 
 from .provider import Provider, ProviderQuery, ProviderResult
 
@@ -32,21 +34,22 @@ _PREPRINT_TYPE = "Informal and Other Publications"
 
 _HEADERS = {
     "User-Agent": "bibcleaner/0.1 (https://github.com/hzahera/bib-cleaner)",
-    "Connection": "close",  # avoid keep-alive issues with DBLP
 }
 
-# DBLP is unauthenticated and throttles bursts with HTTP 429. Keep a small gap
+# DBLP is unauthenticated and throttles bursts with HTTP 429. Keep a gap
 # between calls to stay polite, and back off when asked.
-_MIN_GAP = 1.0
+_MIN_GAP = 3.0
 _last_call: float = 0.0
+_throttle_lock = asyncio.Lock()
 
 
-def _throttle():
+async def _throttle():
     global _last_call
-    elapsed = time.time() - _last_call
-    if elapsed < _MIN_GAP:
-        time.sleep(_MIN_GAP - elapsed)
-    _last_call = time.time()
+    async with _throttle_lock:
+        elapsed = time.time() - _last_call
+        if elapsed < _MIN_GAP:
+            await asyncio.sleep(_MIN_GAP - elapsed)
+        _last_call = time.time()
 
 
 def _normalize_text(text: str) -> str:
@@ -92,24 +95,24 @@ def _title_keywords(title: str, max_words: int = 6) -> str:
     return " ".join(keywords[:max_words])
 
 
-def _fetch(query: str, max_results: int) -> list:
+async def _fetch(client, query: str, max_results: int) -> list:
     """Single DBLP query (with throttle + 429 back-off); returns info dicts or []."""
-    for attempt in range(4):
-        _throttle()
+    for attempt in range(5):
+        await _throttle()
         try:
-            resp = requests.get(
+            resp = await client.get(
                 DBLP_SEARCH,
                 params={"q": query, "format": "json", "h": max_results},
                 headers=_HEADERS,
-                timeout=10,
             )
             if resp.status_code == 429:
                 # Respect Retry-After when present, else exponential back-off.
                 # Logged at debug: it's a handled, recoverable event, not an error.
                 retry_after = resp.headers.get("Retry-After")
-                wait = int(retry_after) if (retry_after or "").isdigit() else 2 ** attempt
-                logger.debug(f"DBLP rate-limited; retrying in {wait}s")
-                time.sleep(wait)
+                wait = int(retry_after) if (retry_after or "").isdigit() else 2**attempt
+                wait = wait * (0.5 + random.random())  # jitter to avoid thundering herd
+                logger.debug(f"DBLP rate-limited; retrying in {wait:.1f}s")
+                await asyncio.sleep(wait)
                 continue
             if resp.status_code != 200:
                 logger.warning(f"DBLP HTTP {resp.status_code}")
@@ -119,16 +122,16 @@ def _fetch(query: str, max_results: int) -> list:
             if isinstance(hits, dict):
                 hits = [hits]
             return [h["info"] for h in hits if "info" in h]
-        except requests.exceptions.ConnectionError as exc:
+        except httpx2.ConnectError as exc:
             logger.debug(f"DBLP connection error (attempt {attempt + 1}): {exc}")
-            time.sleep(1 + attempt)
+            await asyncio.sleep(1 + attempt)
         except Exception as exc:
             logger.warning(f"DBLP request failed: {exc}")
             break
     return []
 
 
-def search(title: str, max_results: int = 10) -> list:
+async def search(client, title: str, max_results: int = 10) -> list:
     """Return up to max_results DBLP hit dicts for the given title.
 
     Tries progressively shorter keyword queries (6 -> 4 -> 3 keywords) so
@@ -140,13 +143,14 @@ def search(title: str, max_results: int = 10) -> list:
         query = _title_keywords(title, max_words=n_words)
         if not query:
             continue
-        hits = _fetch(query, max_results)
+        hits = await _fetch(client, query, max_results)
         if hits:
             return hits
     return []
 
 
-def lookup_raw(
+async def lookup_raw(
+    client,
     title: str,
     authors: Optional[list] = None,
     year: Optional[str] = None,
@@ -156,7 +160,7 @@ def lookup_raw(
     Callers use 'published' to replace an arXiv entry and 'preprint' to
     expand the author list when no published version exists.
     """
-    hits = search(title, max_results=10)
+    hits = await search(client, title, max_results=10)
     result = {"published": None, "preprint": None}
     if not hits:
         return result
@@ -235,8 +239,11 @@ def normalize(info: dict) -> dict:
 class DblpProvider(Provider):
     name = "dblp"
 
-    def lookup(self, query: ProviderQuery) -> ProviderResult:
-        raw = lookup_raw(query.title, query.authors, query.year)
+    def __init__(self, client: httpx2.AsyncClient):
+        self.client = client
+
+    async def lookup(self, query: ProviderQuery) -> ProviderResult:
+        raw = await lookup_raw(self.client, query.title, query.authors, query.year)
         published = raw["published"]
         preprint = raw["preprint"]
 

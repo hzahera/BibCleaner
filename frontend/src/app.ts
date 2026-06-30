@@ -109,10 +109,10 @@ export class BibCleanerApp {
           <div class="panel__options-checkbox">
             <fieldset>
                 <legend>Options</legend>
-                <span><input type="checkbox" id="protect_caps" name="protect_caps" checked/><label for="protect_caps">Title capitalization protection</label></span>
-                <span><input type="checkbox" id="dedup" name="dedup" checked/><label for="dedup">Duplicate merging</label></span>
-                <span><input type="checkbox" id="normalize_keys" name="normalize_keys" checked/><label for="normalize_keys">Normalize entry keys</label></span>
-                <span><input type="checkbox" id="validate" name="validate" checked/><label for="validate">Validate bibliography</label></span>
+                <span><input type="checkbox" id="protect_caps" name="protect_caps" checked/><label for="protect_caps">Title capitalization protection</label><span class="tooltip-container"><span class="tooltip-icon" aria-hidden="true">🛈</span><span class="tooltip-text" role="tooltip">Ensure the capitalization stays as in the input .bib file</span></span></span>
+                <span><input type="checkbox" id="dedup" name="dedup" checked/><label for="dedup">Duplicate merging</label><span class="tooltip-container"><span class="tooltip-icon" aria-hidden="true">🛈</span><span class="tooltip-text" role="tooltip">Deduplicate entries based on their title and authors</span></span></span>
+                <span><input type="checkbox" id="normalize_keys" name="normalize_keys" checked/><label for="normalize_keys">Normalize entry keys</label><span class="tooltip-container"><span class="tooltip-icon" aria-hidden="true">🛈</span><span class="tooltip-text" role="tooltip">Change the entries ID to a default format</span></span></span>
+                <span><input type="checkbox" id="validate" name="validate" checked/><label for="validate">Validate bibliography</label><span class="tooltip-container"><span class="tooltip-icon" aria-hidden="true">🛈</span><span class="tooltip-text" role="tooltip">Check if the entries have the required and optional fields</span></span></span>
             </fieldset>
           </div>
           <div class="panel__submit-row">
