@@ -1,9 +1,13 @@
 """Offline (no-network) tests for the LaTeX-friendly cleaning features."""
 
+import asyncio
+
 import pytest
 import httpx2
 
 import bibcleaner.enricher as E
+from bibcleaner.enricher import AsyncLookupCoordinator
+from bibcleaner.bibcleaner import process_bibliography_content
 from bibtexparser.model import Entry, Field
 
 from bibcleaner.latex import protect_title_caps
@@ -20,6 +24,51 @@ from bibcleaner.venues import normalize_venue
 
 def _entry(entry_type, key, **fields):
     return Entry(entry_type, key, [Field(k, v) for k, v in fields.items()])
+
+
+@pytest.mark.asyncio
+async def test_lookup_coordinator_shares_inflight_request():
+    class FakeProvider:
+        name = "fake"
+
+        def __init__(self):
+            self.calls = 0
+
+        async def lookup(self, query):
+            self.calls += 1
+            await asyncio.sleep(0.01)
+            return E.ProviderResult(matched=True)
+
+    provider = FakeProvider()
+    coordinator = AsyncLookupCoordinator()
+    query = E.ProviderQuery(title="Same paper", year="2024")
+
+    results = await asyncio.gather(
+        *(coordinator.lookup(provider, query) for _ in range(8))
+    )
+
+    assert provider.calls == 1
+    assert all(result.matched for result in results)
+    assert coordinator.inflight_hits["fake"] == 7
+
+
+@pytest.mark.asyncio
+async def test_offline_processing_reports_progress_for_all_entries():
+    progress = []
+    content = """@article{one, title={One}, journal={J}}
+@article{two, title={Two}, journal={J}}
+"""
+
+    async with httpx2.AsyncClient() as client:
+        output = await process_bibliography_content(
+            content,
+            client=client,
+            enrich=False,
+            progress=lambda done, total: progress.append((done, total)),
+        )
+
+    assert "one" in output and "two" in output
+    assert progress[-1] == (2, 2)
 
 
 # --------------------------------------------------------------------------

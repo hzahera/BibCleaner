@@ -23,6 +23,8 @@ the fullest available author list.
 import os
 import re
 import logging
+import time
+from collections import Counter, defaultdict
 from typing import Optional
 
 from bibtexparser.model import Entry, Field
@@ -47,7 +49,8 @@ _ARXIV_FIELDS = {"eprint", "archiveprefix", "primaryclass"}
 
 
 class ProviderRegistry:
-    def __init__(self, client):
+    def __init__(self, client, coordinator=None):
+        self.coordinator = coordinator or AsyncLookupCoordinator()
         self.arxiv = ArxivProvider(client)
         self.dblp = DblpProvider(client)
         self.crossref = CrossrefProvider(client)
@@ -63,6 +66,88 @@ class ProviderRegistry:
 _lookup_cache = TTLCache(ttl=float(os.environ.get("BIBCLEANER_CACHE_TTL", 86400)))
 
 
+class AsyncLookupCoordinator:
+    """Share concurrent provider lookups without sharing futures across loops.
+
+    Completed values use the process-wide TTL cache. In-flight tasks belong to
+    this coordinator, which is created per processing run, so an asyncio task
+    is never awaited from a different event loop.
+    """
+
+    def __init__(self, cache=None):
+        self.cache = cache or _lookup_cache
+        self._inflight = {}
+        self._lock = asyncio.Lock()
+        self.requests = Counter()
+        self.cache_hits = Counter()
+        self.inflight_hits = Counter()
+        self.failures = Counter()
+        self.latency = defaultdict(float)
+
+    async def lookup(self, provider, query: ProviderQuery) -> ProviderResult:
+        key = _cache_key(provider.name, query)
+        cached = self.cache.get(key)
+        if cached is not None:
+            self.cache_hits[provider.name] += 1
+            return cached
+
+        async with self._lock:
+            # Another waiter may have completed the request while we waited.
+            cached = self.cache.get(key)
+            if cached is not None:
+                self.cache_hits[provider.name] += 1
+                return cached
+
+            task = self._inflight.get(key)
+            if task is None:
+                async def perform_lookup():
+                    result = await provider.lookup(query)
+                    # Store before the task completes so a new caller cannot
+                    # observe a finished task during the cache-write window.
+                    self.cache.set(key, result)
+                    return result
+
+                task = asyncio.create_task(perform_lookup())
+                self._inflight[key] = task
+                self.requests[provider.name] += 1
+
+                def remove_finished(finished):
+                    if self._inflight.get(key) is finished:
+                        self._inflight.pop(key, None)
+
+                task.add_done_callback(remove_finished)
+            else:
+                self.inflight_hits[provider.name] += 1
+
+        started = time.perf_counter()
+        try:
+            # A cancelled waiter must not cancel the shared upstream request.
+            result = await asyncio.shield(task)
+            self.cache.set(key, result)
+            return result
+        except Exception:
+            self.failures[provider.name] += 1
+            raise
+        finally:
+            self.latency[provider.name] += time.perf_counter() - started
+            if task.done():
+                async with self._lock:
+                    if self._inflight.get(key) is task:
+                        self._inflight.pop(key, None)
+
+    def summary(self) -> dict:
+        return {
+            "requests": dict(self.requests),
+            "cache_hits": dict(self.cache_hits),
+            "inflight_hits": dict(self.inflight_hits),
+            "failures": dict(self.failures),
+            "latency_seconds": {
+                provider: round(value, 3)
+                for provider, value in self.latency.items()
+            },
+        }
+
+
 def _cache_key(provider_name: str, q: ProviderQuery) -> tuple:
     return (
         provider_name,
@@ -70,11 +155,17 @@ def _cache_key(provider_name: str, q: ProviderQuery) -> tuple:
         (q.doi or "").strip().lower(),
         " ".join((q.title or "").lower().split()),
         str(q.year or ""),
+        tuple(" ".join((author or "").lower().split()) for author in q.authors),
     )
 
 
-async def _lookup(provider, q: ProviderQuery) -> ProviderResult:
+async def _lookup(
+    provider, q: ProviderQuery, coordinator: AsyncLookupCoordinator = None
+) -> ProviderResult:
     """provider.lookup(q), memoized (including negative results)."""
+    if coordinator is not None:
+        return await coordinator.lookup(provider, q)
+
     key = _cache_key(provider.name, q)
     cached = _lookup_cache.get(key)
     if cached is not None:
@@ -290,8 +381,8 @@ def _data_from_journal_ref(journal_ref: str, year, authors: list) -> Optional[di
 async def _resolve_by_doi(providers, doi: str) -> Optional[dict]:
     """Resolve a DOI to structured venue data via CrossRef, then OpenAlex."""
     doi_query = ProviderQuery(doi=doi)  # empty title => providers skip title search
-    cr_task = _lookup(providers.crossref, doi_query)
-    oa_task = _lookup(providers.openalex, doi_query)
+    cr_task = _lookup(providers.crossref, doi_query, providers.coordinator)
+    oa_task = _lookup(providers.openalex, doi_query, providers.coordinator)
 
     cr_res, oa_res = await asyncio.gather(cr_task, oa_task)
     return cr_res.published_data or oa_res.published_data
@@ -310,6 +401,22 @@ _SOURCE_CONFIDENCE = {
 }
 # Matches below this are flagged for review rather than applied.
 _MIN_CONFIDENCE = float(os.environ.get("BIBCLEANER_MIN_CONFIDENCE", "0.8"))
+
+
+def _env_flag(name: str, default: bool = False) -> bool:
+    value = os.environ.get(name)
+    if value is None:
+        return default
+    return value.strip().lower() in {"1", "true", "yes", "on"}
+
+
+def _should_query_dblp(primaryclass: Optional[str]) -> bool:
+    """Optionally avoid DBLP for entries outside the computer-science corpus."""
+    if not _env_flag("BIBCLEANER_SKIP_DBLP_NON_CS", False):
+        return True
+    if not primaryclass:
+        return True
+    return primaryclass.lower() == "cs" or primaryclass.lower().startswith("cs.")
 
 
 async def resolve_entry(
@@ -351,6 +458,7 @@ async def resolve_entry(
     arxiv_res = await _lookup(
         provider_registry.arxiv,
         ProviderQuery(title=title, authors=authors, year=year, arxiv_id=arxiv_id),
+        provider_registry.coordinator,
     )
     out["canonical_authors"] = arxiv_res.canonical_authors
     out["primaryclass"] = arxiv_res.primaryclass
@@ -366,6 +474,17 @@ async def resolve_entry(
         if data:
             source = "doi"
 
+    # arXiv's declared journal reference is already available from the first
+    # request. Use recognized venues early when enabled instead of paying for
+    # multiple title searches that cannot improve the result.
+    if data is None and _env_flag("BIBCLEANER_FAST_JOURNAL_REF", True):
+        if arxiv_res.journal_ref:
+            data = _data_from_journal_ref(
+                arxiv_res.journal_ref, arxiv_res.year or year, arxiv_res.canonical_authors
+            )
+            if data:
+                source = "journal_ref"
+
     dblp_res = ProviderResult()
     cr_res = ProviderResult()
     ss_res = ProviderResult()
@@ -373,9 +492,16 @@ async def resolve_entry(
 
     # Step 3: Title-based lookups — only if DOI didn't find a match.
     if data is None:
-        dblp_task = _lookup(provider_registry.dblp, tquery)
-        crossref_task = _lookup(provider_registry.crossref, tquery)
-        dblp_res, cr_res = await asyncio.gather(dblp_task, crossref_task)
+        crossref_task = _lookup(
+            provider_registry.crossref, tquery, provider_registry.coordinator
+        )
+        if _should_query_dblp(arxiv_res.primaryclass):
+            dblp_task = _lookup(
+                provider_registry.dblp, tquery, provider_registry.coordinator
+            )
+            dblp_res, cr_res = await asyncio.gather(dblp_task, crossref_task)
+        else:
+            cr_res = await crossref_task
 
         if dblp_res.published_data:
             data, source = dblp_res.published_data, "dblp"
@@ -385,8 +511,14 @@ async def resolve_entry(
     # Steps 4 & 5: SS + OpenAlex — only if no published venue yet and
     # DBLP/CrossRef didn't recognise the entry at all.
     if data is None and not (dblp_res.matched or cr_res.matched):
-        ss_task = _lookup(provider_registry.semanticscholar, tquery)
-        openalex_task = _lookup(provider_registry.openalex, tquery)
+        ss_task = _lookup(
+            provider_registry.semanticscholar,
+            tquery,
+            provider_registry.coordinator,
+        )
+        openalex_task = _lookup(
+            provider_registry.openalex, tquery, provider_registry.coordinator
+        )
         ss_res, oa_res = await asyncio.gather(ss_task, openalex_task)
 
         if ss_res.published_data:

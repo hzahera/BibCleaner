@@ -4,6 +4,8 @@ import asyncio
 import json
 import logging
 import os
+import tempfile
+import threading
 import time
 from difflib import SequenceMatcher
 from typing import Dict, List, Optional
@@ -15,6 +17,7 @@ from .provider import Provider, ProviderQuery, ProviderResult
 logger = logging.getLogger(__name__)
 
 OPENALEX_WORKS = "https://api.openalex.org/works"
+_CACHE_WRITE_LOCK = threading.Lock()
 
 
 def _normalize_text(text: str) -> str:
@@ -60,6 +63,7 @@ class OpenAlexClient(Provider):
         self.mailto = mailto
         self.client = client
         self.last_request_time = 0.0
+        self._cache_dirty = False
         self.cache = self._load_cache()
 
     def _load_cache(self) -> Dict:
@@ -74,11 +78,43 @@ class OpenAlexClient(Provider):
     def _save_cache(self):
         if not self.cache_path:
             return
+
+        directory = os.path.dirname(self.cache_path) or "."
+        temporary_path = None
         try:
-            with open(self.cache_path, "w", encoding="utf-8") as f:
-                json.dump(self.cache, f, ensure_ascii=False, indent=2)
+            # Merge with data written by another job before replacing the file.
+            # The atomic replace prevents readers from seeing partial JSON.
+            with _CACHE_WRITE_LOCK:
+                merged = {}
+                if os.path.exists(self.cache_path):
+                    try:
+                        with open(self.cache_path, "r", encoding="utf-8") as f:
+                            merged = json.load(f)
+                    except Exception:
+                        merged = {}
+                merged.update(self.cache)
+                fd, temporary_path = tempfile.mkstemp(
+                    prefix=".bibcleaner-openalex-",
+                    suffix=".json",
+                    dir=directory,
+                )
+                with os.fdopen(fd, "w", encoding="utf-8") as f:
+                    json.dump(merged, f, ensure_ascii=False, indent=2)
+                os.replace(temporary_path, self.cache_path)
+                self.cache = merged
+                self._cache_dirty = False
         except Exception as e:
             logger.warning(f"Could not save OpenAlex cache: {e}")
+            if temporary_path:
+                try:
+                    os.unlink(temporary_path)
+                except OSError:
+                    pass
+
+    def flush_cache(self):
+        """Persist newly fetched values once at the end of a processing run."""
+        if self._cache_dirty:
+            self._save_cache()
 
     async def _rate_limit(self):
         elapsed = time.time() - self.last_request_time
@@ -126,6 +162,7 @@ class OpenAlexClient(Provider):
             work = data["results"][0]
 
         self.cache[cache_key] = work
+        self._cache_dirty = True
         return work
 
     async def search_by_title(self, title: str, max_results: int = 5) -> List[Dict]:
@@ -145,6 +182,7 @@ class OpenAlexClient(Provider):
         works = data.get("results", []) if data else []
 
         self.cache[cache_key] = works
+        self._cache_dirty = True
         return works
 
     async def best_match(

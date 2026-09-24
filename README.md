@@ -66,7 +66,7 @@ Each source is a self-contained `Provider` (in the `providers/` package) exposin
 |---|---|---|
 | 1 | **arXiv API** | Canonical author names, `primaryclass`, and the author-declared venue (`journal_ref` / `doi`) |
 | 2 | **DOI lookup** | Exact resolution via CrossRef → OpenAlex when a DOI is known — no fuzzy matching |
-| 3 | **DBLP** | Title search — fast, no rate limits, authoritative for CS |
+| 3 | **DBLP** | Paced title search, authoritative for CS |
 | 4 | **CrossRef** | Title search; journal and proceedings metadata (ACM, IEEE, Springer) |
 | 5 | **Semantic Scholar** | Fallback arXiv-ID lookup when DBLP and CrossRef find nothing |
 | 6 | **OpenAlex** | Last-resort title search |
@@ -243,8 +243,11 @@ curl -s http://localhost:8000/jobs/$JOB/result -o cleaned_references.bib
 | `BIBCLEANER_MAX_BYTES` | `10485760` | Max upload size |
 | `BIBCLEANER_RATE_LIMIT` | `30` | Requests per minute per IP |
 | `BIBCLEANER_WORKERS` | `2` | Concurrent processing jobs |
+| `BIBCLEANER_MAX_QUEUED_JOBS` | `workers * 4` | Maximum waiting jobs before the API returns `503` |
 | `BIBCLEANER_JOB_TTL` | `3600` | Seconds a finished job (and its result) is kept |
 | `BIBCLEANER_CACHE_TTL` | `86400` | Lookup-cache lifetime (repeat arXiv IDs/DOIs are served instantly) |
+| `BIBCLEANER_FAST_JOURNAL_REF` | `true` | Use a recognized arXiv `journal_ref` before title searches |
+| `BIBCLEANER_SKIP_DBLP_NON_CS` | `false` | Skip DBLP for entries with a non-CS arXiv category |
 | `CROSSREF_MAILTO`, `S2_API_KEY` | — | Polite-pool email / API key for upstream sources |
 
 ### Deploy to Render
@@ -364,7 +367,8 @@ set CROSSREF_MAILTO=you@example.com
 **How BibCleaner behaves under rate limits** (so a busy run never stalls or fails):
 - **Semantic Scholar** — without a key, it's *skipped immediately* when throttled (it's only a fallback; enrichment continues via arXiv/DBLP/CrossRef/OpenAlex). With `S2_API_KEY`, it retries with back-off.
 - **DBLP** — automatically paced and retried with back-off on `HTTP 429` (honoring `Retry-After`), so transient throttling is handled for you.
-- Repeated lookups (same arXiv ID / DOI / title) are cached for the run, so re-runs and duplicate entries don't re-hit the APIs.
+- Repeated lookups (same arXiv ID / DOI / title) are cached across jobs, and concurrent identical lookups share one in-flight request.
+- OpenAlex cache updates are persisted atomically after an enrichment run, so later process restarts can reuse them.
 
 ---
 
@@ -401,11 +405,11 @@ For every entry in the .bib file
 ├─ Does it contain an arXiv ID?
 │   ├─ Yes →  Step 1: arXiv API  (authors + category + declared journal_ref / doi)
 │   │         Step 2: DOI lookup  (CrossRef → OpenAlex, exact — if a DOI is known)
-│   │         Step 3: DBLP        (title search — published venue, one request)
-│   │         Step 4: CrossRef    (title search)
-│   │         Step 5: Semantic Scholar (arXiv-ID lookup)
-│   │         Step 6: OpenAlex    (last-resort title search)
-│   │         Step 7: journal_ref (author-declared venue, known venues only)
+│   │         Step 3: journal_ref (known venues, when fast-path is enabled)
+│   │         Step 4: DBLP        (title search — published venue)
+│   │         Step 5: CrossRef    (title search)
+│   │         Step 6: Semantic Scholar (arXiv-ID lookup)
+│   │         Step 7: OpenAlex    (last-resort title search)
 │   │         else → normalize as clean @misc preprint
 │   │
 │   └─ No  →  Normalize booktitle / journal to canonical full name

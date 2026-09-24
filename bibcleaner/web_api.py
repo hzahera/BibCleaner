@@ -21,6 +21,7 @@ import time
 import uuid
 import logging
 import threading
+from contextlib import asynccontextmanager
 from dataclasses import dataclass, field, asdict
 from typing import Optional
 
@@ -29,6 +30,8 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse, Response
 from . import __version__
 from .bibcleaner import process_bibliography_content
+from .apicontext import ApiContext
+from .enricher import AsyncLookupCoordinator
 from .validation import validate_bibliography_content
 
 logger = logging.getLogger(__name__)
@@ -40,13 +43,43 @@ MAX_UPLOAD_BYTES = int(os.environ.get("BIBCLEANER_MAX_BYTES", 10 * 1024 * 1024))
 MAX_ENTRIES = int(os.environ.get("BIBCLEANER_MAX_ENTRIES", 500))
 RATE_LIMIT = int(os.environ.get("BIBCLEANER_RATE_LIMIT", 30))  # requests / minute / IP
 JOB_TTL = float(os.environ.get("BIBCLEANER_JOB_TTL", 3600))  # seconds
+WORKERS = max(1, int(os.environ.get("BIBCLEANER_WORKERS", 2)))
+MAX_QUEUED_JOBS = max(
+    WORKERS,
+    int(os.environ.get("BIBCLEANER_MAX_QUEUED_JOBS", WORKERS * 4)),
+)
 ALLOWED_ORIGINS = [
     o.strip() for o in os.environ.get("ALLOWED_ORIGINS", "*").split(",") if o.strip()
 ]
 
 _ENTRY_RE = re.compile(r"^[ \t]*@[A-Za-z]+[ \t]*\{", re.MULTILINE)
 
-app = FastAPI(title=APP_NAME, version=__version__)
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    """Share connections and bound background work for the application."""
+    queue = asyncio.Queue(maxsize=MAX_QUEUED_JOBS)
+    coordinator = AsyncLookupCoordinator()
+    async with ApiContext() as api_client:
+        app.state.job_queue = queue
+        app.state.api_client = api_client
+        app.state.lookup_coordinator = coordinator
+        workers = [
+            asyncio.create_task(_job_worker(queue, api_client, coordinator))
+            for _ in range(WORKERS)
+        ]
+        app.state.job_workers = workers
+        try:
+            yield
+        finally:
+            for worker in workers:
+                worker.cancel()
+            await asyncio.gather(*workers, return_exceptions=True)
+            app.state.job_queue = None
+            app.state.api_client = None
+            app.state.lookup_coordinator = None
+
+
+app = FastAPI(title=APP_NAME, version=__version__, lifespan=lifespan)
 
 app.add_middleware(
     CORSMiddleware,
@@ -126,7 +159,14 @@ def _prune_jobs() -> None:
             _jobs.pop(jid, None)
 
 
-async def _run_job(job_id: str, text: str, filename: str, opts: dict) -> None:
+async def _run_job(
+    job_id: str,
+    text: str,
+    filename: str,
+    opts: dict,
+    client=None,
+    coordinator=None,
+) -> None:
     job = _jobs.get(job_id)
     if job is None:
         return
@@ -136,7 +176,14 @@ async def _run_job(job_id: str, text: str, filename: str, opts: dict) -> None:
         job.done, job.total = done, total
 
     try:
-        job.result = await process_bibliography_content(text, progress=progress, **opts)
+        process_options = dict(opts)
+        if client is not None:
+            process_options["client"] = client
+        if coordinator is not None:
+            process_options["coordinator"] = coordinator
+        job.result = await process_bibliography_content(
+            text, progress=progress, **process_options
+        )
         job.filename = filename
         job.status = "done"
     except ValueError as exc:
@@ -144,6 +191,15 @@ async def _run_job(job_id: str, text: str, filename: str, opts: dict) -> None:
     except Exception as exc:  # noqa: BLE001 - surface a generic message to the client
         logger.exception("Job %s failed", job_id)
         job.error, job.status = f"Processing failed: {exc}", "error"
+
+
+async def _job_worker(queue: asyncio.Queue, client, coordinator) -> None:
+    while True:
+        job_id, text, filename, opts = await queue.get()
+        try:
+            await _run_job(job_id, text, filename, opts, client, coordinator)
+        finally:
+            queue.task_done()
 
 
 # ---- Upload validation ----------------------------------------------------
@@ -227,7 +283,22 @@ async def create_job(
     job = Job(id=uuid.uuid4().hex, filename=f"cleaned_{filename}")
     with _jobs_lock:
         _jobs[job.id] = job
-    asyncio.create_task(_run_job(job.id, text, job.filename, opts))
+
+    queue = getattr(request.app.state, "job_queue", None)
+    if queue is None:
+        # This fallback keeps direct ASGI/test usage functional when lifespan
+        # startup is not being managed by the caller.
+        asyncio.create_task(_run_job(job.id, text, job.filename, opts))
+    else:
+        try:
+            queue.put_nowait((job.id, text, job.filename, opts))
+        except asyncio.QueueFull:
+            with _jobs_lock:
+                _jobs.pop(job.id, None)
+            raise HTTPException(
+                status_code=503,
+                detail="Processing queue is full; please try again later",
+            )
     return {"job_id": job.id, "status": job.status}
 
 
@@ -269,7 +340,14 @@ async def clean_bib_sync(
     filename, raw = await _read_upload(file)
     text = _decode_upload_text(raw)
     try:
-        cleaned = await process_bibliography_content(text)
+        options = {}
+        shared_client = getattr(request.app.state, "api_client", None)
+        shared_coordinator = getattr(request.app.state, "lookup_coordinator", None)
+        if shared_client is not None:
+            options["client"] = shared_client
+        if shared_coordinator is not None:
+            options["coordinator"] = shared_coordinator
+        cleaned = await process_bibliography_content(text, **options)
     except ValueError as exc:
         raise HTTPException(status_code=422, detail=str(exc)) from exc
     except Exception as exc:  # noqa: BLE001

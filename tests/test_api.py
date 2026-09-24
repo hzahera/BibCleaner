@@ -31,10 +31,10 @@ def reset_api_state():
         _limiter._hits.clear()
 
 
-def _wait_for_job(job_id: str, timeout: float = 5.0) -> dict:
+def _wait_for_job(job_id: str, timeout: float = 5.0, http_client=client) -> dict:
     deadline = time.time() + timeout
     while time.time() < deadline:
-        response = client.get(f"/jobs/{job_id}")
+        response = http_client.get(f"/jobs/{job_id}")
         assert response.status_code == 200
         payload = response.json()
         if payload["status"] in {"done", "error"}:
@@ -89,6 +89,26 @@ def test_job_flow_uses_uploaded_text_and_returns_cleaned_result(monkeypatch):
         == 'attachment; filename="cleaned_refs.bib"'
     )
     assert result.headers["content-type"].startswith("text/x-bibtex")
+
+
+def test_job_flow_uses_lifespan_worker_queue(monkeypatch):
+    async def fake_process(content, **options):
+        options["progress"](1, 1)
+        return "@article{demo,title={Queued}}\n"
+
+    monkeypatch.setattr("bibcleaner.web_api.process_bibliography_content", fake_process)
+
+    with TestClient(app) as live_client:
+        response = live_client.post(
+            "/jobs",
+            files={"file": ("refs.bib", SAMPLE_BIB, "application/x-bibtex")},
+        )
+
+        assert response.status_code == 202
+        job_id = response.json()["job_id"]
+        status = _wait_for_job(job_id, http_client=live_client)
+
+    assert status["status"] == "done"
 
 
 def test_clean_bib_alias_returns_cleaned_response(monkeypatch):

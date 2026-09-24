@@ -95,13 +95,20 @@ def deduplicate(entries: list) -> tuple:
     """
     best: dict = {}  # identity -> kept Entry
     order: list = []  # surviving entries, in first-seen order
+    positions: dict = {}  # object id -> position in order
     remap: dict = {}  # dropped key -> surviving key
+    remap_children: dict = {}  # surviving key -> keys remapped to it
+
+    def add_remap(old: str, new: str) -> None:
+        remap[old] = new
+        remap_children.setdefault(new, set()).add(old)
 
     for entry in entries:
         ident = _identity(entry)
         if ident is None or ident not in best:
             if ident is not None:
                 best[ident] = entry
+            positions[id(entry)] = len(order)
             order.append(entry)
             continue
 
@@ -109,14 +116,15 @@ def deduplicate(entries: list) -> tuple:
         if _richness(entry) > _richness(incumbent):
             # The new entry wins: keep it, fold the incumbent's extras in.
             _merge_into(entry, incumbent)
-            order[order.index(incumbent)] = entry
+            position = positions.pop(id(incumbent))
+            order[position] = entry
+            positions[id(entry)] = position
             best[ident] = entry
-            remap[incumbent.key] = entry.key
-            for old, new in list(remap.items()):
-                if new == incumbent.key:
-                    remap[old] = entry.key
+            for old in remap_children.pop(incumbent.key, set()):
+                add_remap(old, entry.key)
+            add_remap(incumbent.key, entry.key)
         else:
             _merge_into(incumbent, entry)
-            remap[entry.key] = incumbent.key
+            add_remap(entry.key, incumbent.key)
 
     return order, remap

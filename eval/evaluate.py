@@ -16,6 +16,7 @@ Tip: set S2_API_KEY for best coverage on the live run.
 """
 
 import argparse
+import asyncio
 import json
 import os
 import sys
@@ -25,6 +26,7 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from bibcleaner.enricher import resolve_entry  # noqa: E402
+from bibcleaner.apicontext import ApiContext  # noqa: E402
 from bibcleaner.venues import normalize_or_keep  # noqa: E402
 
 HERE = Path(__file__).resolve().parent
@@ -32,14 +34,14 @@ DATASET = HERE / "dataset.json"
 CACHE = HERE / "results_cache.json"
 
 
-def _resolved(paper: dict) -> dict:
+async def _resolved(paper: dict, client) -> dict:
     """Resolve one paper live -> {type, venue, year, confidence, source}."""
     fields = {
         "title": paper["title"],
         "eprint": paper["arxiv_id"],
         "archiveprefix": "arXiv",
     }
-    res = resolve_entry(fields)
+    res = await resolve_entry(client, fields)
     data = res.get("data")
     venue = ""
     rtype = "misc"
@@ -56,6 +58,14 @@ def _resolved(paper: dict) -> dict:
         "confidence": round(res.get("confidence", 0.0), 2),
         "source": res.get("source"),
     }
+
+
+async def _resolve_live(papers: list[dict]) -> dict:
+    async with ApiContext() as client:
+        results = {}
+        for paper in papers:
+            results[paper["arxiv_id"]] = await _resolved(paper, client)
+        return results
 
 
 def _score(paper: dict, r: dict, threshold: float) -> dict:
@@ -96,12 +106,13 @@ def main():
         sys.exit("No results_cache.json to replay — run once live first.")
 
     results = {}
+    live_results = {} if args.offline else asyncio.run(_resolve_live(papers))
     rows = []
     counts = {"correct": 0, "wrong_venue": 0, "missed": 0, "correct_preprint": 0, "false_positive": 0}
 
     for p in papers:
         aid = p["arxiv_id"]
-        r = cache[aid] if args.offline else _resolved(p)
+        r = cache[aid] if args.offline else live_results[aid]
         results[aid] = r
         s = _score(p, r, args.min_confidence)
         counts[s["outcome"]] += 1

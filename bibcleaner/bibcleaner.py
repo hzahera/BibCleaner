@@ -2,6 +2,7 @@ import bibtexparser
 
 from .enricher import (
     ProviderRegistry,
+    AsyncLookupCoordinator,
     enrich_limited,
     normalize_venue_fields,
     extract_arxiv_id,
@@ -30,6 +31,8 @@ def _protect_caps(entry) -> bool:
 async def process_bibliography_content(
     content,
     *,
+    client=None,
+    coordinator=None,
     enrich: bool = True,
     protect_caps: bool = True,
     dedup: bool = False,
@@ -52,10 +55,25 @@ async def process_bibliography_content(
                      remap (dedup + normalization) to those files in place.
     progress       : optional callable(done, total) invoked per processed entry.
     """
+    if client is not None:
+        return await _process_with_client(
+            client,
+            content,
+            coordinator=coordinator,
+            enrich=enrich,
+            protect_caps=protect_caps,
+            dedup=dedup,
+            cited_keys=cited_keys,
+            normalize_keys=normalize_keys,
+            rewrite_tex=rewrite_tex,
+            progress=progress,
+        )
+
     async with ApiContext() as async_client:
         return await _process_with_client(
             async_client,
             content,
+            coordinator=coordinator,
             enrich=enrich,
             protect_caps=protect_caps,
             dedup=dedup,
@@ -70,6 +88,7 @@ async def _process_with_client(
     client,
     content,
     *,
+    coordinator=None,
     enrich: bool = True,
     protect_caps: bool = True,
     dedup: bool = False,
@@ -95,7 +114,10 @@ async def _process_with_client(
 
     # ---- 0. Warm the arXiv cache in one batched request (avoids per-entry
     #         calls that trip arXiv's rate limit). ----
-    provider_registry = ProviderRegistry(client)
+    coordinator = coordinator or AsyncLookupCoordinator()
+    provider_registry = (
+        ProviderRegistry(client, coordinator=coordinator) if enrich else None
+    )
 
     if enrich:
         arxiv_ids = []
@@ -111,19 +133,39 @@ async def _process_with_client(
 
     # ---- 1. Enrich, normalize venues, protect capitalization ----
     enriched = venue_normalized = caps = 0
-    tasks = [enrich_limited(client, entry, provider_registry) for entry in entries]
-    await asyncio.gather(*tasks)  # run enrichments in parallel to speed up
-    for entry in entries:
-        if entry.get("enriched"):
+    arxiv_entries = (
+        [
+            entry
+            for entry in entries
+            if extract_arxiv_id({f.key: f.value for f in entry.fields})
+        ]
+        if enrich
+        else []
+    )
+    done = len(entries) - len(arxiv_entries)
+    if progress:
+        progress(done, len(entries))
+
+    async def process_entry(entry):
+        return await enrich_limited(client, entry, provider_registry)
+
+    tasks = [process_entry(entry) for entry in arxiv_entries]
+    for task in asyncio.as_completed(tasks):
+        if await task:
             enriched += 1
+        done += 1
+        if progress:
+            progress(done, len(entries))
+
+    for entry in entries:
         if normalize_venue_fields(entry):
             venue_normalized += 1
         if protect_caps and _protect_caps(entry):
             caps += 1
 
-    # Second venue pass so enriched entries also get the canonical form.
-    for entry in entries:
-        normalize_venue_fields(entry)
+    if enrich:
+        print(f"Lookup metrics: {coordinator.summary()}")
+        provider_registry.openalex.flush_cache()
     end = time.time()
     elapsed_time = end - start
     print(
